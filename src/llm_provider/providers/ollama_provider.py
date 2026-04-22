@@ -1,5 +1,17 @@
 """
 Ollama provider implementation.
+
+Communicates with an Ollama server via its REST API (/api/chat, /api/tags).
+Supports local and remote instances, optional bearer-token auth, and
+model-specific options passed through ``extra_settings``.
+
+Extra settings are forwarded as top-level fields in the /api/chat payload,
+which allows caller-controlled Ollama options such as:
+
+- ``think: false``   — disable chain-of-thought on thinking models (e.g. Qwen3)
+- ``keep_alive: "10m"`` — keep the model loaded between requests
+
+Requires: ``requests``
 """
 
 import requests
@@ -25,9 +37,12 @@ T = TypeVar('T')
 
 class OllamaProvider(BaseProvider[T]):
     """
-    Ollama provider implementation.
-    
-    Supports local and remote Ollama instances.
+    Ollama provider — wraps the Ollama REST API (/api/chat, /api/tags).
+
+    Supports local and remote instances. Extra settings in ``ProviderConfig``
+    are forwarded as top-level payload fields on every chat request, enabling
+    model-specific options like ``think`` (disable CoT on thinking models) and
+    ``keep_alive`` (memory retention between requests).
     """
     
     def __init__(self, config: ProviderConfig):
@@ -70,16 +85,24 @@ class OllamaProvider(BaseProvider[T]):
                 "messages": messages,
                 "stream": False
             }
-            
+
             # Add optional parameters
             if request.temperature is not None:
                 payload["options"] = payload.get("options", {})
                 payload["options"]["temperature"] = request.temperature
-            
+
             if request.top_p is not None:
                 payload["options"] = payload.get("options", {})
                 payload["options"]["top_p"] = request.top_p
-            
+
+            # Pass through any extra_settings as top-level payload fields.
+            # This enables Ollama-specific flags such as:
+            #   think: false  — disable chain-of-thought on thinking models (e.g. Qwen3.5)
+            #   keep_alive: "10m"  — keep model loaded between requests
+            if self._config.extra_settings:
+                for key, value in self._config.extra_settings.items():
+                    payload[key] = value
+
             # Make API request
             url = f"{self._base_url}/chat"
             

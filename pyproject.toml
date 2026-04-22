@@ -30,6 +30,12 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
 ]
+gemini = [
+    "google-genai>=1.0.0",
+]
+all = [
+    "google-genai>=1.0.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

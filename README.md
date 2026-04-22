@@ -24,6 +24,14 @@ Or install the package:
 pip install -e .
 ```
 
+For Gemini support, install the optional dependency:
+
+```bash
+pip install google-genai>=1.0.0
+# or
+pip install -e ".[gemini]"
+```
+
 ## Quick Start
 
 ### Basic Usage
@@ -178,7 +186,7 @@ else:
 
 ### Ollama Provider
 
-The Ollama provider supports local and remote Ollama instances.
+The Ollama provider supports local and remote Ollama instances via its REST API.
 
 ```python
 from llm_provider.providers import create_ollama_provider
@@ -189,9 +197,77 @@ factory.register_provider("ollama", create_ollama_provider)
 # Configuration
 ollama_config = ProviderConfig(
     host="http://localhost:11434",  # Default Ollama URL
-    default_model="llama2",
+    default_model="llama3",
     timeout=30.0
 )
+```
+
+**Ollama-specific `extra_settings`:**
+
+The `extra_settings` dict is forwarded as top-level fields in the Ollama `/api/chat` payload, enabling model-specific options:
+
+| Setting | Type | Description |
+|---------|------|-------------|
+| `think` | bool | Disable chain-of-thought on thinking models (e.g. `false` for Qwen3) |
+| `keep_alive` | str | Keep model in memory between requests (e.g. `"10m"`) |
+
+```python
+ollama_config = ProviderConfig(
+    host="http://localhost:11434",
+    default_model="qwen3:8b",
+    extra_settings={"think": False, "keep_alive": "10m"}
+)
+```
+
+### Gemini Provider
+
+The Gemini provider uses the `google-genai` SDK to connect to Google's Gemini API. Requires an API key from [Google AI Studio](https://aistudio.google.com/).
+
+**Install the extra dependency first:**
+
+```bash
+pip install google-genai>=1.0.0
+```
+
+```python
+from llm_provider.providers import create_gemini_provider
+
+# Register Gemini provider
+factory.register_provider("gemini", create_gemini_provider)
+
+# Configuration
+gemini_config = ProviderConfig(
+    host="https://generativelanguage.googleapis.com",  # for interface consistency
+    default_model="gemini-2.0-flash",
+    api_key="YOUR_GEMINI_API_KEY",
+    timeout=60.0
+)
+```
+
+**Supported Gemini features:**
+- Structured output (via JSON extraction)
+- Vision / multimodal input
+- System prompts (`system_instruction`)
+- Temperature and top_p sampling
+- Up to ~1M token context window (model-dependent)
+
+**Using both providers together:**
+
+```python
+from llm_provider import ProviderFactory
+from llm_provider.providers import create_ollama_provider, create_gemini_provider
+
+factory = ProviderFactory()
+factory.register_provider("ollama", create_ollama_provider)
+factory.register_provider("gemini", create_gemini_provider)
+
+# Use fast local model for cheap tasks
+local = factory.get_provider("ollama")
+filter_result = local.chat(filter_request)
+
+# Use cloud model for high-quality reasoning
+cloud = factory.get_provider("gemini")
+recommendation = cloud.chat(recommend_request)
 ```
 
 ## Creating Custom Providers
