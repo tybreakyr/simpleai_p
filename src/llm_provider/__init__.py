@@ -52,7 +52,7 @@ from .config import (
 )
 
 # Provider implementations
-from .providers import create_ollama_provider, create_gemini_provider
+from .providers import create_ollama_provider, create_gemini_provider, create_openai_provider
 
 __all__ = [
     # Version
@@ -103,4 +103,5 @@ __all__ = [
     # Provider implementations
     "create_ollama_provider",
     "create_gemini_provider",
+    "create_openai_provider",
 ]

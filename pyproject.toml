@@ -33,8 +33,12 @@ dev = [
 gemini = [
     "google-genai>=1.0.0",
 ]
+openai = [
+    "openai>=1.0.0",
+]
 all = [
     "google-genai>=1.0.0",
+    "openai>=1.0.0",
 ]
 
 [tool.setuptools]
