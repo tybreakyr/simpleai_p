@@ -130,16 +130,33 @@ class ModelNotAvailableError(LLMError):
 
 
 class RateLimitExceededError(LLMError):
-    """Error when API rate limit is exceeded."""
+    """
+    Error when an API rate limit or quota is exceeded.
 
-    def __init__(self, message: str, operation: str = "", cause: Optional[Exception] = None):
+    Attributes:
+        retry_after: Suggested seconds to wait before retrying, if provided
+                     by the API (e.g. from Retry-After header or error body).
+                     None means fall back to the retry config's backoff.
+        retryable:   False for hard quota exhaustions (e.g. daily limits)
+                     where retrying in the same session is pointless.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        operation: str = "",
+        cause: Optional[Exception] = None,
+        retry_after: Optional[float] = None,
+        retryable: bool = True,
+    ):
         super().__init__(
             error_type=ErrorType.RATE_LIMIT_EXCEEDED,
             message=message,
-            retryable=True,
+            retryable=retryable,
             operation=operation,
-            cause=cause
+            cause=cause,
         )
+        self.retry_after = retry_after
 
 
 class InvalidConfigurationError(LLMError):
@@ -193,8 +210,11 @@ def classify_error(error_message: str, status_code: Optional[int] = None,
     if any(term in error_message_lower for term in ["timeout", "timed out", "time out"]):
         return (ErrorType.TIMEOUT, True)
     
-    # Rate limit errors - retryable
-    if status_code == 429 or any(term in error_message_lower for term in ["rate limit", "too many requests"]):
+    # Rate limit / quota errors - retryable (caller should check for daily limits)
+    if status_code == 429 or any(term in error_message_lower for term in [
+        "rate limit", "too many requests", "resource_exhausted",
+        "quota exceeded", "quota_exceeded", "rateLimitExceeded",
+    ]):
         return (ErrorType.RATE_LIMIT_EXCEEDED, True)
     
     # Authentication/authorization errors - not retryable
