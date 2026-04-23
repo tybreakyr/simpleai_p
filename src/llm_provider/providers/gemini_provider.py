@@ -27,9 +27,13 @@ from ..models import (
     ProviderFeatures,
 )
 from ..provider import Provider
+import re
+import time
+import threading
+
 from ..errors import (
     LLMError, ConnectionFailedError, TimeoutError,
-    InvalidResponseError,
+    InvalidResponseError, RateLimitExceededError,
 )
 from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
@@ -40,12 +44,42 @@ T = TypeVar('T')
 _GENERATE_CONTENT_METHOD = "generateContent"
 
 
+def _parse_gemini_retry_delay(error_str: str) -> Optional[float]:
+    """
+    Extract the suggested retry delay (seconds) from a Gemini 429 error string.
+
+    Gemini embeds this in two ways:
+      - JSON body: 'retryDelay': '9s'
+      - Human-readable: "Please retry in 9.3758776s"
+    Returns None if no delay is found.
+    """
+    # JSON-style: 'retryDelay': '9.3s'  or  "retryDelay": "9s"
+    m = re.search(r"['\"]retryDelay['\"]\s*:\s*['\"](\d+(?:\.\d+)?)s['\"]", error_str)
+    if m:
+        return float(m.group(1)) + 1.0  # +1s buffer
+
+    # Prose: "retry in 9.3758776s"
+    m = re.search(r"retry in (\d+(?:\.\d+)?)s", error_str, re.IGNORECASE)
+    if m:
+        return float(m.group(1)) + 1.0
+
+    return None
+
+
+def _is_daily_quota(error_str: str) -> bool:
+    """Return True if the 429 is a daily quota exhaustion (not per-minute)."""
+    return "PerDay" in error_str or "per_day" in error_str.lower()
+
+
 class GeminiProvider(BaseProvider[T]):
     """
     Google Gemini provider via google-genai SDK.
 
     api_key is required. host is stored in ProviderConfig for interface
     consistency but the SDK uses the API key directly.
+
+    Rate limiting: set rate_limit (requests per minute) in ProviderConfig to
+    enforce a minimum interval between requests and avoid quota exhaustion.
     """
 
     def __init__(self, config: ProviderConfig):
@@ -58,14 +92,32 @@ class GeminiProvider(BaseProvider[T]):
         from google import genai
         self._client = genai.Client(api_key=config.api_key)
 
+        # Rate limiter state
+        self._rate_limit_rpm: Optional[float] = config.rate_limit
+        self._last_request_at: float = 0.0
+        self._rate_lock = threading.Lock()
+
     # ------------------------------------------------------------------
     # Provider interface
     # ------------------------------------------------------------------
+
+    def _enforce_rate_limit(self) -> None:
+        """Sleep if needed to respect the configured requests-per-minute limit."""
+        if not self._rate_limit_rpm:
+            return
+        min_interval = 60.0 / self._rate_limit_rpm
+        with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+            self._last_request_at = time.monotonic()
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         """Send a chat request to Gemini."""
 
         def _chat() -> ChatResponse[T]:
+            self._enforce_rate_limit()
+
             from google.genai import types
 
             model_name = request.model or self._config.default_model
@@ -130,6 +182,24 @@ class GeminiProvider(BaseProvider[T]):
                 )
 
             except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    daily = _is_daily_quota(error_str)
+                    retry_after = None if daily else _parse_gemini_retry_delay(error_str)
+                    raise RateLimitExceededError(
+                        message=(
+                            "Gemini daily quota exhausted — will not retry until quota resets. "
+                            "Consider upgrading to a paid tier or reducing pipeline frequency."
+                            if daily else
+                            f"Gemini rate limit exceeded. "
+                            f"Retry after {retry_after:.0f}s." if retry_after else
+                            "Gemini rate limit exceeded."
+                        ),
+                        operation="chat",
+                        cause=e,
+                        retry_after=retry_after,
+                        retryable=not daily,
+                    ) from e
                 self._classify_and_raise_error(e, "chat")
 
         return self._execute_with_retry(_chat, "chat")

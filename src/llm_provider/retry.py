@@ -106,8 +106,10 @@ def retry_with_backoff(
                         cause=e
                     ) from e
             
-            # Calculate delay and wait before retrying
-            delay = calculate_backoff_delay(attempt, config)
+            # Use API-suggested retry delay if provided (e.g. Gemini retryDelay),
+            # otherwise fall back to exponential backoff.
+            suggested = getattr(e, "retry_after", None)
+            delay = suggested if suggested is not None else calculate_backoff_delay(attempt, config)
             time.sleep(delay)
     
     # Should never reach here, but just in case
