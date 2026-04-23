@@ -36,9 +36,13 @@ gemini = [
 openai = [
     "openai>=1.0.0",
 ]
+anthropic = [
+    "anthropic",
+]
 all = [
     "google-genai>=1.0.0",
     "openai>=1.0.0",
+    "anthropic",
 ]
 
 [tool.setuptools]

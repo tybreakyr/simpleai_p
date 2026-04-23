@@ -24,12 +24,13 @@ Or install the package:
 pip install -e .
 ```
 
-For Gemini support, install the optional dependency:
+For provider-specific dependencies:
 
 ```bash
-pip install google-genai>=1.0.0
-# or
-pip install -e ".[gemini]"
+pip install -e ".[gemini]"     # Google Gemini
+pip install -e ".[openai]"     # OpenAI
+pip install -e ".[anthropic]"  # Anthropic Claude
+pip install -e ".[all]"        # All providers
 ```
 
 ## Quick Start
@@ -251,22 +252,114 @@ gemini_config = ProviderConfig(
 - Temperature and top_p sampling
 - Up to ~1M token context window (model-dependent)
 
-**Using both providers together:**
+### OpenAI Provider
+
+The OpenAI provider uses the `openai` SDK (v1.x+). Requires an API key from [OpenAI](https://platform.openai.com/).
+
+**Install the extra dependency first:**
+
+```bash
+pip install openai>=1.0.0
+```
+
+```python
+from llm_provider.providers import create_openai_provider
+
+factory.register_provider("openai", create_openai_provider)
+
+openai_config = ProviderConfig(
+    host="https://api.openai.com",
+    default_model="gpt-4o",
+    api_key="YOUR_OPENAI_API_KEY",
+    timeout=60.0
+)
+```
+
+**Supported OpenAI features:**
+- Structured output (via JSON extraction)
+- Vision / multimodal input (model-dependent, e.g. gpt-4o)
+- System prompts
+- Temperature and top_p sampling
+- Function calling
+- Up to 128k token context window (model-dependent)
+
+**OpenAI-compatible endpoints** — set `base_url` in `extra_settings` to point at any
+OpenAI-compatible API (Azure OpenAI, local proxy, Groq, etc.):
+
+```python
+openai_config = ProviderConfig(
+    host="https://api.openai.com",
+    default_model="gpt-4o",
+    api_key="YOUR_KEY",
+    extra_settings={"base_url": "https://your-azure-endpoint.openai.azure.com/"}
+)
+```
+
+### Anthropic Provider
+
+The Anthropic provider uses the `anthropic` SDK. Requires an API key from [Anthropic](https://console.anthropic.com/).
+
+**Install the extra dependency first:**
+
+```bash
+pip install anthropic
+```
+
+```python
+from llm_provider.providers import create_anthropic_provider
+
+factory.register_provider("anthropic", create_anthropic_provider)
+
+anthropic_config = ProviderConfig(
+    host="https://api.anthropic.com",
+    default_model="claude-sonnet-4-6",
+    api_key="YOUR_ANTHROPIC_API_KEY",
+    timeout=60.0
+)
+```
+
+**Supported Anthropic features:**
+- Structured output (via JSON extraction)
+- Vision / multimodal input (model-dependent)
+- System prompts (passed as top-level `system` parameter)
+- Temperature and top_p sampling
+- Function calling (tool use)
+- Up to 200k token context window (model-dependent)
+
+**Anthropic-specific `extra_settings`:**
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `max_tokens` | int | `8192` | Maximum tokens to generate (required by the API) |
+
+```python
+anthropic_config = ProviderConfig(
+    host="https://api.anthropic.com",
+    default_model="claude-opus-4-7",
+    api_key="YOUR_ANTHROPIC_API_KEY",
+    extra_settings={"max_tokens": 16384}
+)
+```
+
+**Using multiple providers together:**
 
 ```python
 from llm_provider import ProviderFactory
-from llm_provider.providers import create_ollama_provider, create_gemini_provider
+from llm_provider.providers import (
+    create_ollama_provider, create_openai_provider, create_anthropic_provider
+)
 
 factory = ProviderFactory()
 factory.register_provider("ollama", create_ollama_provider)
-factory.register_provider("gemini", create_gemini_provider)
+factory.register_provider("openai", create_openai_provider)
+factory.register_provider("anthropic", create_anthropic_provider)
 
 # Use fast local model for cheap tasks
-local = factory.get_provider("ollama")
+local = factory.create_provider("ollama", ollama_config)
 filter_result = local.chat(filter_request)
 
 # Use cloud model for high-quality reasoning
-cloud = factory.get_provider("gemini")
+cloud = factory.create_provider("anthropic", anthropic_config)
 recommendation = cloud.chat(recommend_request)
 ```
 
