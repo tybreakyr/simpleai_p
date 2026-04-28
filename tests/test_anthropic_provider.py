@@ -47,6 +47,7 @@ def _make_provider(config=None):
 
 def _make_message_response(text="Hello from Anthropic"):
     block = MagicMock()
+    block.type = "text"
     block.text = text
     response = MagicMock()
     response.content = [block]
@@ -113,7 +114,9 @@ class TestAnthropicProviderChat(unittest.TestCase):
 
     def test_chat_concatenates_multiple_blocks(self):
         b1, b2 = MagicMock(), MagicMock()
+        b1.type = "text"
         b1.text = "Hello"
+        b2.type = "text"
         b2.text = " world"
         resp = MagicMock()
         resp.content = [b1, b2]
@@ -199,9 +202,14 @@ class TestAnthropicProviderChat(unittest.TestCase):
         self.assertEqual(messages[2], {"role": "user", "content": "How are you?"})
 
     def test_chat_skips_blocks_without_text_attr(self):
-        block_with_text = MagicMock(spec=["text"])
+        block_with_text = MagicMock(spec=["text", "type"])
+        block_with_text.type = "text"
         block_with_text.text = "Hello"
-        block_without_text = MagicMock(spec=[])  # no 'text' attribute
+        block_without_text = MagicMock(spec=["type", "id", "name", "input"])  # no 'text' attribute
+        block_without_text.type = "tool_use"
+        block_without_text.id = "call_1"
+        block_without_text.name = "func"
+        block_without_text.input = {}
         resp = MagicMock()
         resp.content = [block_with_text, block_without_text]
         self.provider._client.messages.create.return_value = resp

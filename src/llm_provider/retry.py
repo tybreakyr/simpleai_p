@@ -3,8 +3,10 @@ Retry mechanism with exponential backoff for LLM provider operations.
 """
 
 import time
+import asyncio
+import inspect
 from dataclasses import dataclass
-from typing import Callable, TypeVar, Optional
+from typing import Callable, TypeVar, Optional, Any
 from functools import wraps
 
 from .errors import LLMError, is_retryable, OperationFailedError
@@ -129,6 +131,74 @@ def retry_with_backoff(
     )
 
 
+async def _async_retry_with_backoff(
+    func: Callable[[], Any],
+    config: RetryConfig,
+    operation_name: str = ""
+) -> Any:
+    """
+    Execute an async function with retry logic and exponential backoff.
+    """
+    last_error: Optional[Exception] = None
+    
+    for attempt in range(config.max_retries + 1):
+        try:
+            return await func()
+        except Exception as e:
+            last_error = e
+            
+            # Check if error is retryable
+            if not is_retryable(e):
+                # Wrap non-LLM errors
+                if not isinstance(e, LLMError):
+                    raise OperationFailedError(
+                        message=f"Operation failed: {str(e)}",
+                        operation=operation_name,
+                        retryable=False,
+                        cause=e
+                    ) from e
+                # Re-raise LLM errors that are not retryable
+                raise
+            
+            # If this was the last attempt, raise the error
+            if attempt >= config.max_retries:
+                # Update error with retry count
+                if isinstance(e, LLMError):
+                    e.retry_count = attempt + 1
+                    e.operation = operation_name
+                    raise
+                else:
+                    raise OperationFailedError(
+                        message=f"Operation failed after {attempt + 1} attempts: {str(e)}",
+                        operation=operation_name,
+                        retryable=True,
+                        retry_count=attempt + 1,
+                        cause=e
+                    ) from e
+            
+            # Use API-suggested retry delay if provided (e.g. Gemini retryDelay),
+            # otherwise fall back to exponential backoff.
+            suggested = getattr(e, "retry_after", None)
+            delay = suggested if suggested is not None else calculate_backoff_delay(attempt, config)
+            await asyncio.sleep(delay)
+    
+    # Should never reach here, but just in case
+    if last_error:
+        raise OperationFailedError(
+            message=f"Operation failed: {str(last_error)}",
+            operation=operation_name,
+            retryable=True,
+            retry_count=config.max_retries,
+            cause=last_error
+        ) from last_error
+    
+    raise OperationFailedError(
+        message="Operation failed with unknown error",
+        operation=operation_name,
+        retryable=True
+    )
+
+
 def retryable(operation_name: str = "", retry_config: Optional[RetryConfig] = None):
     """
     Decorator for automatically retrying functions with exponential backoff.
@@ -142,17 +212,30 @@ def retryable(operation_name: str = "", retry_config: Optional[RetryConfig] = No
         def chat(self, request):
             ...
     """
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            config = retry_config or RetryConfig()
-            op_name = operation_name or func.__name__
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs) -> Any:
+                config = retry_config or RetryConfig()
+                op_name = operation_name or func.__name__
+                
+                async def _call():
+                    return await func(*args, **kwargs)
+                
+                return await _async_retry_with_backoff(_call, config, op_name)
             
-            def _call():
-                return func(*args, **kwargs)
+            return async_wrapper
+        else:
+            @wraps(func)
+            def wrapper(*args, **kwargs) -> Any:
+                config = retry_config or RetryConfig()
+                op_name = operation_name or func.__name__
+                
+                def _call():
+                    return func(*args, **kwargs)
+                
+                return retry_with_backoff(_call, config, op_name)
             
-            return retry_with_backoff(_call, config, op_name)
-        
-        return wrapper
+            return wrapper
     return decorator
 

@@ -106,6 +106,44 @@ class TestRetry(unittest.TestCase):
         self.assertEqual(func.call_count, 3)
         self.assertEqual(context.exception.retry_count, 3)
 
+    def test_retryable_decorates_async_function(self):
+        """Test that @retryable works on async functions."""
+        from llm_provider.retry import retryable
+        
+        mock_func = Mock(side_effect=[ConnectionFailedError("fail", "test"), "success"])
+        
+        @retryable(operation_name="test_async", retry_config=RetryConfig(max_retries=1, base_delay=0.01))
+        async def async_operation():
+            return mock_func()
+            
+        import asyncio
+        from unittest.mock import AsyncMock
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+            result = asyncio.run(async_operation())
+            
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_func.call_count, 2)
+        mock_sleep.assert_called_once()
+        
+    def test_async_retryable_uses_asyncio_sleep(self):
+        """Test that async retry uses asyncio.sleep, not time.sleep."""
+        from llm_provider.retry import retryable
+        
+        mock_func = Mock(side_effect=[ConnectionFailedError("fail", "test"), "success"])
+        
+        @retryable(operation_name="test_async_sleep", retry_config=RetryConfig(max_retries=1, base_delay=0.01))
+        async def async_operation():
+            return mock_func()
+            
+        import asyncio
+        from unittest.mock import AsyncMock
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_async_sleep:
+            with patch('time.sleep') as mock_sync_sleep:
+                asyncio.run(async_operation())
+                
+        mock_async_sleep.assert_called_once()
+        mock_sync_sleep.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

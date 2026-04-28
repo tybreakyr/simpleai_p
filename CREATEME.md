@@ -14,7 +14,10 @@ Design a provider interface that all LLM implementations must conform to. The in
   - System prompt (optional instruction for the LLM)
   - Messages array (conversation history with role and content)
   - Optional structured output type (for parsing JSON responses into typed objects)
+  - Optional tools array and tool choice for native tool calling
   
+- **AChat Method**: Asynchronous version of the Chat Method.
+
 - **ListModels Method**: Returns available models for the provider
 
 - **Name Method**: Returns the provider's identifier string
@@ -30,6 +33,7 @@ Design a provider interface that all LLM implementations must conform to. The in
   - Function calling support
   - Temperature parameter support
   - Top-p parameter support
+  - Asynchronous support (`async_supported`)
 
 ### 2. Data Structures
 
@@ -46,10 +50,23 @@ Implement the following core data structures:
 - SystemPrompt (system-level instruction)
 - Messages (array of conversation messages)
 - Optional structured output type reference (for type-safe JSON parsing)
+- Tools array (for native tool calling)
+- Tool choice (string to force specific tool usage)
 
 **ChatResponse**: The output structure from chat operations
 - Message (the raw text response)
 - Optional structured data (parsed JSON if structured output was requested)
+- Tool calls array (if the model requested tool invocations)
+
+**ToolSchema**: Definition of an available tool (function)
+- Name
+- Description
+- Input schema
+
+**ToolCall**: A tool invocation requested by the model
+- ID
+- Name
+- Arguments (parsed JSON map)
 
 **Model**: Represents an available LLM model
 - Name (model identifier)

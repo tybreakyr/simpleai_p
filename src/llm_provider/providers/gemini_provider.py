@@ -112,51 +112,111 @@ class GeminiProvider(BaseProvider[T]):
                 time.sleep(min_interval - elapsed)
             self._last_request_at = time.monotonic()
 
-    def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
-        """Send a chat request to Gemini."""
+    def _build_kwargs(self, request: ChatRequest[T]) -> tuple[str, list, Any]:
+        from google.genai import types
 
-        def _chat() -> ChatResponse[T]:
-            self._enforce_rate_limit()
+        model_name = request.model or self._config.default_model
 
-            from google.genai import types
-
-            model_name = request.model or self._config.default_model
-
-            messages = list(request.messages)
-            if not messages:
-                raise InvalidResponseError(
-                    "ChatRequest must contain at least one message", operation="chat"
-                )
-
-            # Build contents list from messages.
-            # Gemini SDK uses "user" / "model" roles (not "assistant").
-            contents: list[types.Content] = []
-
-            # Prepend system prompt as a user turn if provided
-            # (google-genai supports system_instruction in GenerateContentConfig)
-            system_instruction: Optional[str] = (
-                request.system_prompt.content if request.system_prompt else None
+        messages = list(request.messages)
+        if not messages:
+            raise InvalidResponseError(
+                "ChatRequest must contain at least one message", operation="chat"
             )
 
-            for msg in messages:
-                gemini_role = "model" if msg.role == "assistant" else "user"
-                contents.append(
-                    types.Content(
-                        role=gemini_role,
-                        parts=[types.Part(text=msg.content)],
-                    )
+        contents: list[types.Content] = []
+        system_instruction: Optional[str] = (
+            request.system_prompt.content if request.system_prompt else None
+        )
+
+        for msg in messages:
+            gemini_role = "model" if msg.role == "assistant" else "user"
+            contents.append(
+                types.Content(
+                    role=gemini_role,
+                    parts=[types.Part(text=msg.content)],
                 )
+            )
 
-            # Build generation config
-            gen_cfg_kwargs: Dict[str, Any] = {}
-            if request.temperature is not None:
-                gen_cfg_kwargs["temperature"] = request.temperature
-            if request.top_p is not None:
-                gen_cfg_kwargs["top_p"] = request.top_p
-            if system_instruction:
-                gen_cfg_kwargs["system_instruction"] = system_instruction
+        gen_cfg_kwargs: Dict[str, Any] = {}
+        if request.temperature is not None:
+            gen_cfg_kwargs["temperature"] = request.temperature
+        if request.top_p is not None:
+            gen_cfg_kwargs["top_p"] = request.top_p
+        if system_instruction:
+            gen_cfg_kwargs["system_instruction"] = system_instruction
+            
+        if request.tools:
+            gen_cfg_kwargs["tools"] = [
+                {
+                    "function_declarations": [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema
+                        }
+                        for tool in request.tools
+                    ]
+                }
+            ]
+            
+        if request.tool_choice:
+            if request.tool_choice == "auto":
+                gen_cfg_kwargs["tool_config"] = {"function_calling_config": {"mode": "AUTO"}}
+            elif request.tool_choice == "none":
+                gen_cfg_kwargs["tool_config"] = {"function_calling_config": {"mode": "NONE"}}
+            elif request.tool_choice == "any":
+                gen_cfg_kwargs["tool_config"] = {"function_calling_config": {"mode": "ANY"}}
+            else:
+                gen_cfg_kwargs["tool_config"] = {
+                    "function_calling_config": {
+                        "mode": "ANY",
+                        "allowed_function_names": [request.tool_choice]
+                    }
+                }
 
-            gen_config = types.GenerateContentConfig(**gen_cfg_kwargs) if gen_cfg_kwargs else None
+        gen_config = types.GenerateContentConfig(**gen_cfg_kwargs) if gen_cfg_kwargs else None
+        return model_name, contents, gen_config
+
+    def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
+        message_content: str = response.text or ""
+        
+        from ..models import ToolCall
+        tool_calls = []
+        if getattr(response, "function_calls", None):
+            for fc in response.function_calls:
+                call_id = getattr(fc, "id", None) or ToolCall.make_id()
+                args = fc.args
+                if hasattr(args, "items"):
+                    args = dict(args.items())
+                elif not isinstance(args, dict):
+                    try:
+                        import json
+                        args = json.loads(args) if isinstance(args, str) else {}
+                    except Exception:
+                        args = {}
+                tool_calls.append(ToolCall(id=call_id, name=fc.name, arguments=args))
+
+        structured_data: Optional[T] = None
+        if request.structured_output_type and not tool_calls:
+            try:
+                structured_data = parse_structured_output(
+                    message_content, request.structured_output_type
+                )
+            except Exception:
+                pass
+
+        return ChatResponse(
+            message=message_content,
+            structured_data=structured_data,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=None
+        )
+
+    def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        """Send a chat request to Gemini."""
+        def _chat() -> ChatResponse[T]:
+            self._enforce_rate_limit()
+            model_name, contents, gen_config = self._build_kwargs(request)
 
             try:
                 response = self._client.models.generate_content(
@@ -164,23 +224,7 @@ class GeminiProvider(BaseProvider[T]):
                     contents=contents,
                     config=gen_config,
                 )
-
-                message_content: str = response.text or ""
-
-                structured_data: Optional[T] = None
-                if request.structured_output_type:
-                    try:
-                        structured_data = parse_structured_output(
-                            message_content, request.structured_output_type
-                        )
-                    except Exception:
-                        pass
-
-                return ChatResponse(
-                    message=message_content,
-                    structured_data=structured_data,
-                )
-
+                return self._parse_response(response, request)
             except Exception as e:
                 error_str = str(e)
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
@@ -203,6 +247,42 @@ class GeminiProvider(BaseProvider[T]):
                 self._classify_and_raise_error(e, "chat")
 
         return self._execute_with_retry(_chat, "chat")
+
+    async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        from ..retry import _async_retry_with_backoff
+            
+        async def _achat() -> ChatResponse[T]:
+            self._enforce_rate_limit()
+            model_name, contents, gen_config = self._build_kwargs(request)
+
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=gen_config,
+                )
+                return self._parse_response(response, request)
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    daily = _is_daily_quota(error_str)
+                    retry_after = None if daily else _parse_gemini_retry_delay(error_str)
+                    from ..errors import RateLimitExceededError
+                    raise RateLimitExceededError(
+                        message=(
+                            "Gemini daily quota exhausted — will not retry until quota resets. "
+                            if daily else
+                            f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s." if retry_after else
+                            "Gemini rate limit exceeded."
+                        ),
+                        operation="achat",
+                        cause=e,
+                        retry_after=retry_after,
+                        retryable=not daily,
+                    ) from e
+                self._classify_and_raise_error(e, "achat")
+
+        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
 
     def list_models(self) -> List[Model]:
         """List Gemini models that support content generation."""
@@ -239,6 +319,7 @@ class GeminiProvider(BaseProvider[T]):
             function_calling=True,
             temperature=True,
             top_p=True,
+            async_supported=True,
         )
 
 

@@ -20,6 +20,10 @@ class MockProvider(Provider):
         from llm_provider.models import ChatResponse
         return ChatResponse(message="Test response")
     
+    async def achat(self, request):
+        from llm_provider.models import ChatResponse
+        return ChatResponse(message="Test response")
+    
     def list_models(self):
         return [Model(name="test-model")]
     

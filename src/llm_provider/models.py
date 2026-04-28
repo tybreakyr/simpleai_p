@@ -5,6 +5,7 @@ Core data structures for the LLM provider abstraction library.
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any, TypeVar, Generic
 from enum import Enum
+from uuid import uuid4
 
 
 T = TypeVar('T')
@@ -43,6 +44,47 @@ class SystemPrompt:
 
 
 @dataclass
+class ToolSchema:
+    """Describes a tool/function the model may call.
+
+    Use JSON Schema in ``input_schema`` to constrain the arguments the model
+    must supply.  This neutral format is translated to each provider's native
+    wire format inside the provider implementation.
+    """
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+
+    def __post_init__(self):
+        if not self.name:
+            raise ValueError("ToolSchema name cannot be empty")
+        if not isinstance(self.input_schema, dict):
+            raise ValueError("ToolSchema input_schema must be a dict")
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation returned by the model.
+
+    ``id`` is provider-generated for Anthropic/OpenAI; Ollama does not return
+    one so the Ollama provider synthesises ``call_<12-hex-chars>`` instead.
+    """
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+    def __post_init__(self):
+        if not self.name:
+            raise ValueError("ToolCall name cannot be empty")
+        if not isinstance(self.arguments, dict):
+            raise ValueError("ToolCall arguments must be a dict")
+
+    @staticmethod
+    def make_id() -> str:
+        return f"call_{uuid4().hex[:12]}"
+
+
+@dataclass
 class ChatRequest(Generic[T]):
     """Input structure for chat operations."""
     messages: List[Message]
@@ -51,6 +93,8 @@ class ChatRequest(Generic[T]):
     model: Optional[str] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
+    tools: Optional[List[ToolSchema]] = None
+    tool_choice: Optional[str] = None  # "auto" | "any" | "none" | tool name
 
     def __post_init__(self):
         """Validate chat request after initialization."""
@@ -63,6 +107,8 @@ class ChatResponse(Generic[T]):
     """Output structure from chat operations."""
     message: str
     structured_data: Optional[T] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    stop_reason: Optional[str] = None  # "end_turn" | "tool_use" | "max_tokens"
 
     def __post_init__(self):
         """Validate chat response after initialization."""
@@ -92,6 +138,7 @@ class ProviderFeatures:
     function_calling: bool = False
     temperature: bool = True
     top_p: bool = True
+    async_supported: bool = False
 
     def __post_init__(self):
         """Validate provider features after initialization."""

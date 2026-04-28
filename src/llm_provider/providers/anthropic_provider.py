@@ -75,55 +75,105 @@ class AnthropicProvider(BaseProvider[T]):
     # Provider interface
     # ------------------------------------------------------------------
 
+    def _build_kwargs(self, request: ChatRequest[T]) -> Dict[str, Any]:
+        messages: List[Dict[str, str]] = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages
+        ]
+
+        kwargs: Dict[str, Any] = {
+            "model": request.model or self._config.default_model,
+            "max_tokens": self._max_tokens,
+            "messages": messages,
+        }
+        if request.system_prompt:
+            kwargs["system"] = request.system_prompt.content
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.top_p is not None:
+            kwargs["top_p"] = request.top_p
+
+        if request.tools:
+            kwargs["tools"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema
+                }
+                for tool in request.tools
+            ]
+        if request.tool_choice:
+            if request.tool_choice in ("auto", "any"):
+                kwargs["tool_choice"] = {"type": request.tool_choice}
+            else:
+                kwargs["tool_choice"] = {"type": "tool", "name": request.tool_choice}
+                
+        return kwargs
+
+    def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
+        text_blocks = [
+            block.text
+            for block in response.content
+            if getattr(block, "type", None) == "text"
+        ]
+        message_content = "".join(text_blocks)
+
+        from ..models import ToolCall
+        tool_calls = []
+        for block in response.content:
+            if getattr(block, "type", None) == "tool_use":
+                tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
+
+        structured_data: Optional[T] = None
+        if request.structured_output_type and not tool_calls:
+            try:
+                structured_data = parse_structured_output(
+                    message_content, request.structured_output_type
+                )
+            except Exception:
+                pass
+
+        return ChatResponse(
+            message=message_content,
+            structured_data=structured_data,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=getattr(response, "stop_reason", None)
+        )
+
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         def _chat() -> ChatResponse[T]:
-            messages: List[Dict[str, str]] = [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
-            ]
-
-            kwargs: Dict[str, Any] = {
-                "model": request.model or self._config.default_model,
-                "max_tokens": self._max_tokens,
-                "messages": messages,
-            }
-            if request.system_prompt:
-                kwargs["system"] = request.system_prompt.content
-            if request.temperature is not None:
-                kwargs["temperature"] = request.temperature
-            if request.top_p is not None:
-                kwargs["top_p"] = request.top_p
-
+            kwargs = self._build_kwargs(request)
             try:
                 response = self._client.messages.create(**kwargs)
-
-                text_blocks = [
-                    block.text
-                    for block in response.content
-                    if hasattr(block, "text")
-                ]
-                message_content = "".join(text_blocks)
-
-                structured_data: Optional[T] = None
-                if request.structured_output_type:
-                    try:
-                        structured_data = parse_structured_output(
-                            message_content, request.structured_output_type
-                        )
-                    except Exception:
-                        pass
-
-                return ChatResponse(
-                    message=message_content,
-                    structured_data=structured_data,
-                )
-
+                return self._parse_response(response, request)
             except LLMError:
                 raise
             except Exception as e:
                 self._classify_anthropic_error(e)
 
         return self._execute_with_retry(_chat, "chat")
+
+    async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        from ..retry import _async_retry_with_backoff
+        if not hasattr(self, "_async_client"):
+            from anthropic import AsyncAnthropic
+            self._async_client = AsyncAnthropic(
+                api_key=self._config.api_key,
+                timeout=self._config.timeout,
+                max_retries=0,
+            )
+            
+        async def _achat() -> ChatResponse[T]:
+            kwargs = self._build_kwargs(request)
+            try:
+                response = await self._async_client.messages.create(**kwargs)
+                return self._parse_response(response, request)
+            except LLMError:
+                raise
+            except Exception as e:
+                self._classify_anthropic_error(e)
+
+        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
 
     def list_models(self) -> List[Model]:
         def _list_models() -> List[Model]:
@@ -154,6 +204,7 @@ class AnthropicProvider(BaseProvider[T]):
             function_calling=True,
             temperature=True,
             top_p=True,
+            async_supported=True,
         )
 
     # ------------------------------------------------------------------

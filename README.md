@@ -7,10 +7,11 @@ A lightweight Python library that provides a unified abstraction layer for inter
 - **Unified Interface**: Work with multiple LLM providers through a single, consistent API
 - **Provider Abstraction**: Switch between providers without changing your code
 - **Error Handling**: Comprehensive error handling with retry logic
-- **Structured Output**: Robust JSON extraction and parsing from LLM responses
-- **Retry Mechanism**: Configurable exponential backoff retry logic
-- **Thread-Safe**: Factory pattern with thread-safe provider and model caching
-- **Type Safety**: Full type hints and support for structured output parsing
+- **Structured Output**: Robust JSON extraction and native tool-calling capabilities.
+- **Async Support**: Native `asyncio` support across all providers (`achat`).
+- **Retry Mechanism**: Configurable exponential backoff retry logic (sync and async).
+- **Thread-Safe**: Factory pattern with thread-safe provider and model caching.
+- **Type Safety**: Full type hints and support for structured output parsing.
 
 ## Installation
 
@@ -82,6 +83,22 @@ response = provider.chat(request)
 print(response.message)
 ```
 
+### Async Usage
+
+All providers support an asynchronous interface (`achat`) for concurrent applications.
+
+```python
+import asyncio
+from llm_provider import ChatRequest, Message
+
+async def fetch_chat():
+    request = ChatRequest(messages=[Message(role="user", content="Hello!")])
+    response = await provider.achat(request)
+    print(response.message)
+
+asyncio.run(fetch_chat())
+```
+
 ### Structured Output
 
 ```python
@@ -109,6 +126,33 @@ response = provider.chat(request)
 if response.structured_data:
     person = response.structured_data
     print(f"Name: {person.name}, Age: {person.age}")
+```
+
+### Tool Calling
+
+Providers support native tool calling (function calling) where available.
+
+```python
+from llm_provider import ChatRequest, Message, ToolSchema
+
+tools = [
+    ToolSchema(
+        name="get_weather",
+        description="Get current weather",
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}}}
+    )
+]
+
+request = ChatRequest(
+    messages=[Message(role="user", content="What's the weather in London?")],
+    tools=tools,
+    tool_choice="auto"
+)
+
+response = provider.chat(request)
+if response.tool_calls:
+    for call in response.tool_calls:
+        print(f"Tool called: {call.name} with args {call.arguments}")
 ```
 
 ### Error Handling
@@ -165,8 +209,10 @@ else:
 
 - `Message`: Represents a single message in a conversation
 - `SystemPrompt`: System-level instructions
-- `ChatRequest`: Input structure for chat operations
-- `ChatResponse`: Output structure from chat operations
+- `ChatRequest`: Input structure for chat operations (supports `tools` and `tool_choice`)
+- `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
+- `ToolSchema`: Definition of an available tool (function)
+- `ToolCall`: A tool invocation requested by the model
 - `Model`: Represents an available LLM model
 - `ProviderFeatures`: Describes provider capabilities
 - `ProviderConfig`: Configuration for a provider instance

@@ -20,6 +20,8 @@ from .models import (
     ProviderFeatures,
     ProviderConfig,
     FactoryConfig,
+    ToolSchema,
+    ToolCall,
 )
 
 # Error handling
@@ -71,6 +73,8 @@ __all__ = [
     "ProviderFeatures",
     "ProviderConfig",
     "FactoryConfig",
+    "ToolSchema",
+    "ToolCall",
     
     # Error handling
     "LLMError",

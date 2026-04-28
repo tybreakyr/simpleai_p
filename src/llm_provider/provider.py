@@ -3,6 +3,7 @@ Provider interface for LLM providers.
 """
 
 from abc import ABC, abstractmethod
+import asyncio
 from typing import List, TypeVar, Generic
 
 from .models import ChatRequest, ChatResponse, Model, ProviderFeatures
@@ -35,6 +36,22 @@ class Provider(ABC, Generic[T]):
         pass
     
     @abstractmethod
+    async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        """
+        Send a chat request to the provider asynchronously.
+        
+        Args:
+            request: Chat request containing messages and optional system prompt
+            
+        Returns:
+            Chat response with message and optional structured data
+            
+        Raises:
+            LLMError: If the request fails
+        """
+        pass
+    
+    @abstractmethod
     def list_models(self) -> List[Model]:
         """
         List available models for this provider.
@@ -46,6 +63,18 @@ class Provider(ABC, Generic[T]):
             LLMError: If the operation fails
         """
         pass
+    
+    async def alist_models(self) -> List[Model]:
+        """
+        List available models for this provider asynchronously.
+        
+        Returns:
+            List of available models
+            
+        Raises:
+            LLMError: If the operation fails
+        """
+        return await asyncio.to_thread(self.list_models)
     
     @abstractmethod
     def name(self) -> str:

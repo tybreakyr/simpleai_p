@@ -20,6 +20,7 @@ Supported features:
 
 from __future__ import annotations
 
+import json
 from typing import Dict, Any, List, Optional, TypeVar
 
 from ..models import (
@@ -68,56 +69,125 @@ class OpenAIProvider(BaseProvider[T]):
     # Provider interface
     # ------------------------------------------------------------------
 
+    def _build_kwargs(self, request: ChatRequest[T]) -> Dict[str, Any]:
+        messages: List[Dict[str, str]] = []
+        if request.system_prompt:
+            messages.append({
+                "role": "system",
+                "content": request.system_prompt.content
+            })
+
+        for msg in request.messages:
+            messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+
+        kwargs: Dict[str, Any] = {
+            "model": request.model or self._config.default_model,
+            "messages": messages,
+        }
+        
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.top_p is not None:
+            kwargs["top_p"] = request.top_p
+            
+        if "max_tokens" in self._config.extra_settings:
+            kwargs["max_tokens"] = int(self._config.extra_settings["max_tokens"])
+
+        if request.tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema
+                    }
+                }
+                for tool in request.tools
+            ]
+        if request.tool_choice:
+            if request.tool_choice in ("auto", "none"):
+                kwargs["tool_choice"] = request.tool_choice
+            elif request.tool_choice == "any":
+                kwargs["tool_choice"] = "required"
+            else:
+                kwargs["tool_choice"] = {"type": "function", "function": {"name": request.tool_choice}}
+                
+        return kwargs
+
+    def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
+        choice = response.choices[0] if response.choices else None
+        if not choice or (choice.message.content is None and not getattr(choice.message, "tool_calls", None)):
+            raise InvalidResponseError(
+                "OpenAI response contained no content", operation="chat"
+            )
+
+        message_content = choice.message.content or ""
+        
+        from ..models import ToolCall
+        tool_calls = []
+        if choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments)
+                except Exception:
+                    args = tc.function.arguments if isinstance(tc.function.arguments, dict) else {}
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+
+        structured_data: Optional[T] = None
+        if request.structured_output_type and not tool_calls:
+            try:
+                structured_data = parse_structured_output(
+                    message_content, request.structured_output_type
+                )
+            except Exception:
+                pass
+
+        return ChatResponse(
+            message=message_content,
+            structured_data=structured_data,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=choice.finish_reason
+        )
+
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         def _chat() -> ChatResponse[T]:
-            messages: List[Dict[str, str]] = []
-
-            if request.system_prompt:
-                messages.append({"role": "system", "content": request.system_prompt.content})
-
-            for msg in request.messages:
-                messages.append({"role": msg.role, "content": msg.content})
-
-            kwargs: Dict[str, Any] = {
-                "model": request.model or self._config.default_model,
-                "messages": messages,
-            }
-            if request.temperature is not None:
-                kwargs["temperature"] = request.temperature
-            if request.top_p is not None:
-                kwargs["top_p"] = request.top_p
-
+            kwargs = self._build_kwargs(request)
             try:
                 response = self._client.chat.completions.create(**kwargs)
-
-                choice = response.choices[0] if response.choices else None
-                if not choice or choice.message.content is None:
-                    raise InvalidResponseError(
-                        "OpenAI response contained no content", operation="chat"
-                    )
-
-                message_content: str = choice.message.content
-
-                structured_data: Optional[T] = None
-                if request.structured_output_type:
-                    try:
-                        structured_data = parse_structured_output(
-                            message_content, request.structured_output_type
-                        )
-                    except Exception:
-                        pass
-
-                return ChatResponse(
-                    message=message_content,
-                    structured_data=structured_data,
-                )
-
+                return self._parse_response(response, request)
             except LLMError:
                 raise
             except Exception as e:
                 self._classify_openai_error(e)
 
         return self._execute_with_retry(_chat, "chat")
+
+    async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        from ..retry import _async_retry_with_backoff
+        if not hasattr(self, "_async_client"):
+            from openai import AsyncOpenAI
+            self._async_client = AsyncOpenAI(
+                api_key=self._config.api_key,
+                base_url=self._config.host if self._config.host != "https://api.openai.com/v1" else None,
+                timeout=self._config.timeout,
+                max_retries=0,
+            )
+            
+        async def _achat() -> ChatResponse[T]:
+            kwargs = self._build_kwargs(request)
+            try:
+                response = await self._async_client.chat.completions.create(**kwargs)
+                return self._parse_response(response, request)
+            except LLMError:
+                raise
+            except Exception as e:
+                self._classify_openai_error(e)
+
+        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
 
     def list_models(self) -> List[Model]:
         def _list_models() -> List[Model]:
@@ -148,6 +218,7 @@ class OpenAIProvider(BaseProvider[T]):
             function_calling=True,
             temperature=True,
             top_p=True,
+            async_supported=True,
         )
 
     # ------------------------------------------------------------------

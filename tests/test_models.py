@@ -11,7 +11,9 @@ from llm_provider.models import (
     Model,
     ProviderFeatures,
     ProviderConfig,
-    FactoryConfig
+    FactoryConfig,
+    ToolSchema,
+    ToolCall,
 )
 
 
@@ -108,6 +110,97 @@ class TestModels(unittest.TestCase):
                 default_provider="nonexistent",
                 provider_configs={"provider1": provider_config}
             )
+
+
+class TestToolSchema(unittest.TestCase):
+    """Test cases for ToolSchema."""
+
+    def test_basic(self):
+        schema = ToolSchema(
+            name="get_weather",
+            description="Get current weather",
+            input_schema={"type": "object", "properties": {"location": {"type": "string"}}},
+        )
+        self.assertEqual(schema.name, "get_weather")
+        self.assertIsInstance(schema.input_schema, dict)
+
+    def test_empty_name_raises(self):
+        with self.assertRaises(ValueError):
+            ToolSchema(name="", description="d", input_schema={})
+
+    def test_non_dict_schema_raises(self):
+        with self.assertRaises(ValueError):
+            ToolSchema(name="fn", description="d", input_schema="bad")  # type: ignore
+
+
+class TestToolCall(unittest.TestCase):
+    """Test cases for ToolCall."""
+
+    def test_basic(self):
+        tc = ToolCall(id="call_abc123", name="get_weather", arguments={"location": "NYC"})
+        self.assertEqual(tc.id, "call_abc123")
+        self.assertEqual(tc.name, "get_weather")
+        self.assertEqual(tc.arguments["location"], "NYC")
+
+    def test_empty_name_raises(self):
+        with self.assertRaises(ValueError):
+            ToolCall(id="x", name="", arguments={})
+
+    def test_non_dict_arguments_raises(self):
+        with self.assertRaises(ValueError):
+            ToolCall(id="x", name="fn", arguments="bad")  # type: ignore
+
+    def test_make_id_format(self):
+        id1 = ToolCall.make_id()
+        id2 = ToolCall.make_id()
+        self.assertTrue(id1.startswith("call_"))
+        self.assertEqual(len(id1), len("call_") + 12)
+        self.assertNotEqual(id1, id2)
+
+
+class TestChatRequestToolFields(unittest.TestCase):
+    """Test new tool fields on ChatRequest."""
+
+    def _req(self, **kwargs):
+        return ChatRequest(messages=[Message(role="user", content="hi")], **kwargs)
+
+    def test_defaults_none(self):
+        req = self._req()
+        self.assertIsNone(req.tools)
+        self.assertIsNone(req.tool_choice)
+
+    def test_with_tools(self):
+        tools = [ToolSchema(name="fn", description="d", input_schema={})]
+        req = self._req(tools=tools, tool_choice="auto")
+        self.assertEqual(len(req.tools), 1)
+        self.assertEqual(req.tool_choice, "auto")
+
+
+class TestChatResponseToolFields(unittest.TestCase):
+    """Test new tool_calls / stop_reason fields on ChatResponse."""
+
+    def test_defaults_none(self):
+        resp = ChatResponse(message="hello")
+        self.assertIsNone(resp.tool_calls)
+        self.assertIsNone(resp.stop_reason)
+
+    def test_with_tool_calls(self):
+        tc = ToolCall(id="call_1", name="fn", arguments={"x": 1})
+        resp = ChatResponse(message="", tool_calls=[tc], stop_reason="tool_use")
+        self.assertEqual(len(resp.tool_calls), 1)
+        self.assertEqual(resp.stop_reason, "tool_use")
+
+
+class TestProviderFeaturesAsync(unittest.TestCase):
+    """Test async_supported feature flag."""
+
+    def test_default_false(self):
+        features = ProviderFeatures()
+        self.assertFalse(features.async_supported)
+
+    def test_can_set_true(self):
+        features = ProviderFeatures(async_supported=True)
+        self.assertTrue(features.async_supported)
 
 
 if __name__ == '__main__':

@@ -148,6 +148,7 @@ class TestOpenAIProviderChat(unittest.TestCase):
     def test_chat_none_content_raises(self):
         choice = MagicMock()
         choice.message.content = None
+        choice.message.tool_calls = None
         resp = MagicMock()
         resp.choices = [choice]
         self.provider._client.chat.completions.create.return_value = resp
