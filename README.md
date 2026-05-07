@@ -155,6 +155,35 @@ if response.tool_calls:
         print(f"Tool called: {call.name} with args {call.arguments}")
 ```
 
+**`tool_choice` values:**
+
+| Value | Behaviour |
+|-------|-----------|
+| `"auto"` | Model decides whether to call a tool |
+| `"none"` | Tool calling disabled |
+| `"any"` / `"required"` | Model must call a tool (`"required"` is accepted as a synonym and normalised to `"any"` internally) |
+| `"<tool_name>"` | Model must call the named tool |
+
+> **Ollama note:** Ollama has no native required-tool mode. When `tool_choice="required"` (or `"any"`) is used with Ollama and the first response contains no tool call, the provider automatically retries with a stricter system-prompt nudge. If the retry also returns no tool call, `InvalidResponseError` is raised.
+
+### Per-request Provider Passthrough (`extra_body`)
+
+`ChatRequest` accepts an `extra_body` dict that lets you pass provider-specific parameters on a per-request basis without touching `ProviderConfig`. Keys must be one of the known provider names (`"anthropic"`, `"openai"`, `"gemini"`, `"ollama"`); unknown keys raise `ValueError` at construction time to catch typos early. Each provider merges only its own bucket — other buckets are silently dropped.
+
+```python
+request = ChatRequest(
+    messages=[Message(role="user", content="Tell me a story.")],
+    extra_body={
+        "anthropic": {"top_k": 40},
+        "openai":    {"seed": 42},
+        "gemini":    {},
+        "ollama":    {"keep_alive": "10m"},
+    },
+)
+```
+
+This is useful when you need a one-off parameter (e.g. `top_k` for a single creative call) without changing the provider's default configuration.
+
 ### Error Handling
 
 ```python
@@ -209,7 +238,7 @@ else:
 
 - `Message`: Represents a single message in a conversation
 - `SystemPrompt`: System-level instructions
-- `ChatRequest`: Input structure for chat operations (supports `tools` and `tool_choice`)
+- `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
 - `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
 - `ToolSchema`: Definition of an available tool (function)
 - `ToolCall`: A tool invocation requested by the model
