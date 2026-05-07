@@ -16,7 +16,7 @@ Construction-time validation:
 
 import importlib.util
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from llm_provider.models import (
     ChatRequest, Message, SystemPrompt, ToolSchema, ProviderConfig,
@@ -208,6 +208,48 @@ class TestOllamaExtraBodyAndRequired(unittest.TestCase):
         with patch.object(provider, "_execute_with_retry", side_effect=[empty, empty]):
             with self.assertRaises(InvalidResponseError):
                 provider.chat(req)
+
+
+class TestOllamaRequiredEmulationAsync(unittest.IsolatedAsyncioTestCase):
+    async def test_required_emulation_retries_with_nudge_async(self):
+        from llm_provider.models import ChatResponse, ToolCall
+
+        provider = _ollama_provider()
+        req = ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_TOOL],
+            tool_choice="required",
+        )
+
+        empty = ChatResponse(message="prose, no tool", tool_calls=None)
+        good = ChatResponse(
+            message="",
+            tool_calls=[ToolCall(id="call_1", name="echo", arguments={"x": "ok"})],
+        )
+
+        fake_retry = AsyncMock(side_effect=[empty, good])
+        with patch("llm_provider.retry._async_retry_with_backoff", fake_retry):
+            response = await provider.achat(req)
+        self.assertEqual(fake_retry.await_count, 2)
+        self.assertIsNotNone(response.tool_calls)
+        self.assertEqual(response.tool_calls[0].name, "echo")
+
+    async def test_required_emulation_raises_when_still_no_tool_call_async(self):
+        from llm_provider.models import ChatResponse
+        from llm_provider.errors import InvalidResponseError
+
+        provider = _ollama_provider()
+        req = ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_TOOL],
+            tool_choice="required",
+        )
+
+        empty = ChatResponse(message="prose only", tool_calls=None)
+        fake_retry = AsyncMock(side_effect=[empty, empty])
+        with patch("llm_provider.retry._async_retry_with_backoff", fake_retry):
+            with self.assertRaises(InvalidResponseError):
+                await provider.achat(req)
 
 
 # ---------------------------------------------------------------------------
