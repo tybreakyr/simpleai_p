@@ -107,7 +107,10 @@ class AnthropicProvider(BaseProvider[T]):
                 kwargs["tool_choice"] = {"type": request.tool_choice}
             else:
                 kwargs["tool_choice"] = {"type": "tool", "name": request.tool_choice}
-                
+
+        if request.extra_body:
+            kwargs.update(request.extra_body.get("anthropic", {}))
+
         return kwargs
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:

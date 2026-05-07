@@ -174,6 +174,9 @@ class GeminiProvider(BaseProvider[T]):
                     }
                 }
 
+        if request.extra_body:
+            gen_cfg_kwargs.update(request.extra_body.get("gemini", {}))
+
         gen_config = types.GenerateContentConfig(**gen_cfg_kwargs) if gen_cfg_kwargs else None
         return model_name, contents, gen_config
 
