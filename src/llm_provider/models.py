@@ -84,6 +84,9 @@ class ToolCall:
         return f"call_{uuid4().hex[:12]}"
 
 
+_KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "ollama"})
+
+
 @dataclass
 class ChatRequest(Generic[T]):
     """Input structure for chat operations."""
@@ -94,12 +97,33 @@ class ChatRequest(Generic[T]):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     tools: Optional[List[ToolSchema]] = None
-    tool_choice: Optional[str] = None  # "auto" | "any" | "none" | tool name
+    tool_choice: Optional[str] = None  # "auto" | "any" | "required" | "none" | tool name
+    # Per-provider passthrough into the outgoing request body. Top-level keys
+    # must be one of the known provider names; unknown keys raise ValueError
+    # so typos don't silently no-op. Each provider merges its own bucket into
+    # its outgoing payload — other buckets are dropped.
+    extra_body: Optional[Dict[str, Dict[str, Any]]] = None
 
     def __post_init__(self):
         """Validate chat request after initialization."""
         if not self.messages:
             raise ValueError("Chat request must contain at least one message")
+        if self.tool_choice == "required":
+            self.tool_choice = "any"
+        if self.extra_body is not None:
+            if not isinstance(self.extra_body, dict):
+                raise ValueError("extra_body must be a dict of provider-name -> dict")
+            unknown = set(self.extra_body) - _KNOWN_PROVIDERS
+            if unknown:
+                raise ValueError(
+                    f"extra_body has unknown provider key(s) {sorted(unknown)}; "
+                    f"allowed: {sorted(_KNOWN_PROVIDERS)}"
+                )
+            for k, v in self.extra_body.items():
+                if not isinstance(v, dict):
+                    raise ValueError(
+                        f"extra_body[{k!r}] must be a dict; got {type(v).__name__}"
+                    )
 
 
 @dataclass

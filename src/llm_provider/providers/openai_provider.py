@@ -115,7 +115,10 @@ class OpenAIProvider(BaseProvider[T]):
                 kwargs["tool_choice"] = "required"
             else:
                 kwargs["tool_choice"] = {"type": "function", "function": {"name": request.tool_choice}}
-                
+
+        if request.extra_body:
+            kwargs.update(request.extra_body.get("openai", {}))
+
         return kwargs
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:

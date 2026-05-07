@@ -99,6 +99,9 @@ class OllamaProvider(BaseProvider[T]):
             if request.tool_choice:
                 payload["tool_choice"] = request.tool_choice
 
+        if request.extra_body:
+            payload.update(request.extra_body.get("ollama", {}))
+
         return payload
 
     def _parse_response(self, data: Dict[str, Any], request: ChatRequest[T]) -> ChatResponse[T]:
@@ -138,12 +141,47 @@ class OllamaProvider(BaseProvider[T]):
             tool_calls=tool_calls if tool_calls else None
         )
 
+    _REQUIRED_NUDGE = (
+        "You MUST call exactly one of the provided tools. "
+        "Do not respond with prose; emit a tool call."
+    )
+
+    def _needs_required_emulation(
+        self, request: ChatRequest[T], response: ChatResponse[T]
+    ) -> bool:
+        """Ollama has no native 'required' tool mode; emulate it via a retry nudge."""
+        return (
+            request.tool_choice == "any"
+            and bool(request.tools)
+            and not response.tool_calls
+        )
+
+    def _with_required_nudge(self, request: ChatRequest[T]) -> ChatRequest[T]:
+        """Build a copy of ``request`` with a stricter system prompt forcing a tool call."""
+        if request.system_prompt:
+            new_sp = SystemPrompt(
+                content=request.system_prompt.content + "\n\n" + self._REQUIRED_NUDGE
+            )
+        else:
+            new_sp = SystemPrompt(content=self._REQUIRED_NUDGE)
+        return ChatRequest(
+            messages=list(request.messages),
+            system_prompt=new_sp,
+            structured_output_type=request.structured_output_type,
+            model=request.model,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            extra_body=request.extra_body,
+        )
+
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         """Send a chat request to Ollama."""
-        def _chat():
-            payload = self._build_payload(request)
+        def _chat_for(req: ChatRequest[T]) -> ChatResponse[T]:
+            payload = self._build_payload(req)
             url = f"{self._base_url}/chat"
-            
+
             try:
                 response = self._session.post(
                     url,
@@ -151,32 +189,32 @@ class OllamaProvider(BaseProvider[T]):
                     timeout=self._config.timeout
                 )
                 response.raise_for_status()
-                return self._parse_response(response.json(), request)
-            
+                return self._parse_response(response.json(), req)
+
             except requests.exceptions.Timeout as e:
                 raise TimeoutError(
                     f"Request to Ollama timed out after {self._config.timeout}s",
                     operation="chat",
                     cause=e
                 ) from e
-            
+
             except requests.exceptions.ConnectionError as e:
                 raise ConnectionFailedError(
                     f"Failed to connect to Ollama at {self._base_url}",
                     operation="chat",
                     cause=e
                 ) from e
-            
+
             except requests.exceptions.HTTPError as e:
                 status_code = e.response.status_code if e.response else None
-                
+
                 if status_code == 404:
                     raise ModelNotAvailableError(
                         f"Model '{payload['model']}' not found in Ollama",
                         operation="chat",
                         cause=e
                     ) from e
-                
+
                 error_type, retryable = classify_error(str(e), status_code, e)
                 raise LLMError(
                     error_type=error_type,
@@ -185,11 +223,20 @@ class OllamaProvider(BaseProvider[T]):
                     operation="chat",
                     cause=e
                 ) from e
-            
+
             except Exception as e:
                 self._classify_and_raise_error(e, "chat")
-        
-        return self._execute_with_retry(_chat, "chat")
+
+        result = self._execute_with_retry(lambda: _chat_for(request), "chat")
+        if self._needs_required_emulation(request, result):
+            nudged = self._with_required_nudge(request)
+            result = self._execute_with_retry(lambda: _chat_for(nudged), "chat")
+            if not result.tool_calls:
+                raise InvalidResponseError(
+                    "Ollama did not return a tool call after required-mode retry",
+                    operation="chat",
+                )
+        return result
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         from ..retry import _async_retry_with_backoff
@@ -202,42 +249,42 @@ class OllamaProvider(BaseProvider[T]):
                 timeout=self._config.timeout,
             )
             
-        async def _achat() -> ChatResponse[T]:
-            payload = self._build_payload(request)
+        async def _achat_for(req: ChatRequest[T]) -> ChatResponse[T]:
+            payload = self._build_payload(req)
             url = f"{self._base_url}/chat"
-            
+
             try:
                 response = await self._async_client.post(
                     url,
                     json=payload
                 )
                 response.raise_for_status()
-                return self._parse_response(response.json(), request)
-            
+                return self._parse_response(response.json(), req)
+
             except httpx.TimeoutException as e:
                 raise TimeoutError(
                     f"Request to Ollama timed out after {self._config.timeout}s",
                     operation="achat",
                     cause=e
                 ) from e
-            
+
             except httpx.RequestError as e:
                 raise ConnectionFailedError(
                     f"Failed to connect to Ollama at {self._base_url}",
                     operation="achat",
                     cause=e
                 ) from e
-                
+
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code
-                
+
                 if status_code == 404:
                     raise ModelNotAvailableError(
                         f"Model '{payload['model']}' not found in Ollama",
                         operation="achat",
                         cause=e
                     ) from e
-                
+
                 error_type, retryable = classify_error(str(e), status_code, e)
                 raise LLMError(
                     error_type=error_type,
@@ -246,11 +293,24 @@ class OllamaProvider(BaseProvider[T]):
                     operation="achat",
                     cause=e
                 ) from e
-            
+
             except Exception as e:
                 self._classify_and_raise_error(e, "achat")
 
-        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
+        result = await _async_retry_with_backoff(
+            lambda: _achat_for(request), self._retry_config, "achat"
+        )
+        if self._needs_required_emulation(request, result):
+            nudged = self._with_required_nudge(request)
+            result = await _async_retry_with_backoff(
+                lambda: _achat_for(nudged), self._retry_config, "achat"
+            )
+            if not result.tool_calls:
+                raise InvalidResponseError(
+                    "Ollama did not return a tool call after required-mode retry",
+                    operation="achat",
+                )
+        return result
     
     def list_models(self) -> List[Model]:
         """List available models from Ollama."""
