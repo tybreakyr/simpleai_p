@@ -173,9 +173,10 @@ class OpenAIProvider(BaseProvider[T]):
         from ..retry import _async_retry_with_backoff
         if not hasattr(self, "_async_client"):
             from openai import AsyncOpenAI
+            _async_base_url = self._config.extra_settings.get("base_url") or None
             self._async_client = AsyncOpenAI(
                 api_key=self._config.api_key,
-                base_url=self._config.host if self._config.host != "https://api.openai.com/v1" else None,
+                base_url=_async_base_url,
                 timeout=self._config.timeout,
                 max_retries=0,
             )
