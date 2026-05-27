@@ -211,5 +211,104 @@ class TestCreateGeminiProvider(unittest.TestCase):
                 create_gemini_provider({"default_model": "gemini-1.5-flash"})
 
 
+class TestSanitizeSchemaForGemini(unittest.TestCase):
+    """Gemini's tool schema rejects certain JSON Schema fields. The provider
+    sanitizes them at conversion time so other consumers don't have to."""
+
+    def setUp(self):
+        from llm_provider.providers.gemini_provider import _sanitize_schema_for_gemini
+        self.fn = _sanitize_schema_for_gemini
+
+    def test_strips_top_level_additional_properties(self):
+        schema = {"type": "object", "additionalProperties": {"type": "string"}}
+        self.assertEqual(self.fn(schema), {"type": "object"})
+
+    def test_strips_nested_additional_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "object", "additionalProperties": {"type": "string"}},
+                "counts": {"type": "object", "additionalProperties": {"type": "integer"}},
+            },
+            "required": ["tags"],
+        }
+        result = self.fn(schema)
+        self.assertNotIn("additionalProperties", result["properties"]["tags"])
+        self.assertNotIn("additionalProperties", result["properties"]["counts"])
+        # Other fields preserved
+        self.assertEqual(result["required"], ["tags"])
+        self.assertEqual(result["properties"]["tags"]["type"], "object")
+
+    def test_strips_inside_lists(self):
+        schema = {
+            "type": "object",
+            "allOf": [
+                {"type": "object", "additionalProperties": {"type": "string"}},
+                {"type": "object"},
+            ],
+        }
+        result = self.fn(schema)
+        self.assertNotIn("additionalProperties", result["allOf"][0])
+
+    def test_preserves_schemas_without_offending_keys(self):
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name"],
+        }
+        self.assertEqual(self.fn(schema), schema)
+
+    def test_non_dict_passthrough(self):
+        self.assertEqual(self.fn("string"), "string")
+        self.assertEqual(self.fn(42), 42)
+        self.assertIsNone(self.fn(None))
+
+    def test_applied_during_tool_conversion(self):
+        """End-to-end: a ChatRequest with additionalProperties in a tool schema
+        should have it stripped by the time it reaches the Gemini SDK call."""
+        from llm_provider.models import ToolSchema
+        mock_genai = MagicMock()
+        patcher = patch.dict(sys.modules, {
+            "google": MagicMock(),
+            "google.genai": mock_genai,
+            "google.genai.types": mock_genai.types,
+        })
+        patcher.start()
+        try:
+            provider = _make_provider()
+            # Stub out the SDK call so we can inspect what gets sent
+            mock_resp = MagicMock()
+            mock_resp.text = "ok"
+            mock_resp.candidates = []
+            provider._client.models.generate_content = MagicMock(return_value=mock_resp)
+
+            tool = ToolSchema(
+                name="t",
+                description="d",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "m": {"type": "object", "additionalProperties": {"type": "string"}},
+                    },
+                    "required": ["m"],
+                },
+            )
+            req = ChatRequest(
+                messages=[Message(role="user", content="hi")],
+                model="gemini-1.5-flash",
+                tools=[tool],
+            )
+            provider.chat(req)
+
+            # GenerateContentConfig was instantiated with our (sanitized) tools
+            call_kwargs = mock_genai.types.GenerateContentConfig.call_args.kwargs
+            tools_arg = call_kwargs["tools"]
+            params = tools_arg[0]["function_declarations"][0]["parameters"]
+            self.assertNotIn("additionalProperties", params["properties"]["m"])
+            self.assertEqual(params["properties"]["m"]["type"], "object")
+        finally:
+            patcher.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

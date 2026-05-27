@@ -39,6 +39,33 @@ from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
 
 
+# Fields Gemini's protobuf-derived tool schema does NOT accept, even though
+# they're valid JSON Schema. Adding to this set as we discover incompatibilities.
+# Documented Gemini schema accepts a subset of OpenAPI 3.0 Schema; many JSON
+# Schema features (additionalProperties, oneOf at the wrong level, $ref) are
+# rejected with "Unknown name 'X'" or "Cannot find field".
+_GEMINI_INCOMPATIBLE_SCHEMA_KEYS = frozenset({
+    "additionalProperties",
+})
+
+
+def _sanitize_schema_for_gemini(schema: Any) -> Any:
+    """Recursively strip JSON Schema fields Gemini's tool schema doesn't accept.
+
+    Other providers (OpenAI, Anthropic) accept the full JSON Schema; only the
+    Gemini path needs this. Called inline during tool conversion below.
+    """
+    if isinstance(schema, dict):
+        return {
+            k: _sanitize_schema_for_gemini(v)
+            for k, v in schema.items()
+            if k not in _GEMINI_INCOMPATIBLE_SCHEMA_KEYS
+        }
+    if isinstance(schema, list):
+        return [_sanitize_schema_for_gemini(v) for v in schema]
+    return schema
+
+
 T = TypeVar('T')
 
 _GENERATE_CONTENT_METHOD = "generateContent"
@@ -152,7 +179,7 @@ class GeminiProvider(BaseProvider[T]):
                         {
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.input_schema
+                            "parameters": _sanitize_schema_for_gemini(tool.input_schema),
                         }
                         for tool in request.tools
                     ]
