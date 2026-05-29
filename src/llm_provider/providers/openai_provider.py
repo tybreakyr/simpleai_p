@@ -78,10 +78,33 @@ class OpenAIProvider(BaseProvider[T]):
             })
 
         for msg in request.messages:
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
+            if msg.role == "assistant" and msg.tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments),
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                })
+            elif msg.role == "tool":
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": msg.tool_call_id,
+                    "content": msg.content,
+                })
+            else:
+                messages.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
 
         kwargs: Dict[str, Any] = {
             "model": request.model or self._config.default_model,
@@ -218,7 +241,7 @@ class OpenAIProvider(BaseProvider[T]):
             streaming=True,
             vision=True,
             context_window=128_000,
-            supported_roles=["system", "user", "assistant"],
+            supported_roles=["system", "user", "assistant", "tool"],
             function_calling=True,
             temperature=True,
             top_p=True,

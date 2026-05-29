@@ -16,13 +16,30 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 @dataclass
 class Message:
-    """Represents a single message in a conversation."""
+    """Represents a single message in a conversation.
+
+    Beyond plain text turns, a ``Message`` can also represent the two halves
+    of a tool-calling exchange so multi-turn tool loops can be replayed back
+    to a provider:
+
+    - An *assistant* turn that invoked tools carries ``tool_calls`` (the calls
+      the model made). ``content`` may be empty for a tool-only turn.
+    - A *tool-result* turn (``role="tool"``) carries ``tool_call_id`` (the id
+      of the call it answers) and optionally ``name``; ``content`` holds the
+      stringified tool result.
+
+    Providers translate these neutral fields into their native wire format.
+    """
     role: str
     content: str
+    tool_calls: Optional[List["ToolCall"]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
 
     def __post_init__(self):
         """Validate message after initialization."""
@@ -30,6 +47,8 @@ class Message:
             raise ValueError("Message role cannot be empty")
         if not isinstance(self.content, str):
             raise ValueError("Message content must be a string")
+        if self.role == MessageRole.TOOL.value and not self.tool_call_id:
+            raise ValueError("Tool-result message requires a tool_call_id")
 
 
 @dataclass
@@ -72,6 +91,11 @@ class ToolCall:
     id: str
     name: str
     arguments: Dict[str, Any]
+    # Opaque provider-specific data that must be replayed verbatim when this
+    # call is sent back in conversation history. Gemini 3.x uses it to carry a
+    # ``thought_signature`` on the functionCall part (required, or the API 400s).
+    # Other providers leave it None.
+    thought_signature: Optional[Any] = None
 
     def __post_init__(self):
         if not self.name:
