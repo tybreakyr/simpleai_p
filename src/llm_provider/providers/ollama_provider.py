@@ -64,7 +64,29 @@ class OllamaProvider(BaseProvider[T]):
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt.content})
         for msg in request.messages:
-            messages.append({"role": msg.role, "content": msg.content})
+            if msg.role == "assistant" and msg.tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                })
+            elif msg.role == "tool":
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": msg.tool_call_id,
+                    "content": msg.content,
+                })
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
 
         payload = {
             "model": request.model or self._config.default_model,
@@ -381,7 +403,7 @@ class OllamaProvider(BaseProvider[T]):
             streaming=True,  # Ollama supports streaming
             vision=False,  # Ollama doesn't natively support vision in chat API
             context_window=8192,  # Typical for Ollama models
-            supported_roles=["system", "user", "assistant"],
+            supported_roles=["system", "user", "assistant", "tool"],
             function_calling=True,
             temperature=True,
             top_p=True,

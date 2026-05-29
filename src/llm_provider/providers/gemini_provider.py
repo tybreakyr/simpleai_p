@@ -156,13 +156,39 @@ class GeminiProvider(BaseProvider[T]):
         )
 
         for msg in messages:
-            gemini_role = "model" if msg.role == "assistant" else "user"
-            contents.append(
-                types.Content(
-                    role=gemini_role,
-                    parts=[types.Part(text=msg.content)],
+            if msg.role == "assistant" and msg.tool_calls:
+                parts = []
+                if msg.content:
+                    parts.append(types.Part(text=msg.content))
+                for tc in msg.tool_calls:
+                    parts.append(
+                        types.Part(
+                            function_call=types.FunctionCall(name=tc.name, args=tc.arguments)
+                        )
+                    )
+                contents.append(types.Content(role="model", parts=parts))
+            elif msg.role == "tool":
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=msg.name or "",
+                                    response={"result": msg.content},
+                                )
+                            )
+                        ],
+                    )
                 )
-            )
+            else:
+                gemini_role = "model" if msg.role == "assistant" else "user"
+                contents.append(
+                    types.Content(
+                        role=gemini_role,
+                        parts=[types.Part(text=msg.content)],
+                    )
+                )
 
         gen_cfg_kwargs: Dict[str, Any] = {}
         if request.temperature is not None:

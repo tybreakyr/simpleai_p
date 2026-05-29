@@ -76,10 +76,34 @@ class AnthropicProvider(BaseProvider[T]):
     # ------------------------------------------------------------------
 
     def _build_kwargs(self, request: ChatRequest[T]) -> Dict[str, Any]:
-        messages: List[Dict[str, str]] = [
-            {"role": msg.role, "content": msg.content}
-            for msg in request.messages
-        ]
+        messages: List[Dict[str, Any]] = []
+        for msg in request.messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                blocks: List[Dict[str, Any]] = []
+                if msg.content:
+                    blocks.append({"type": "text", "text": msg.content})
+                for tc in msg.tool_calls:
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.arguments,
+                    })
+                messages.append({"role": "assistant", "content": blocks})
+            elif msg.role == "tool":
+                result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.tool_call_id,
+                    "content": msg.content,
+                }
+                # Anthropic requires tool_result blocks to ride in a user turn;
+                # merge consecutive tool results into the same user message.
+                if messages and messages[-1]["role"] == "user" and isinstance(messages[-1]["content"], list):
+                    messages[-1]["content"].append(result_block)
+                else:
+                    messages.append({"role": "user", "content": [result_block]})
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
 
         kwargs: Dict[str, Any] = {
             "model": request.model or self._config.default_model,
