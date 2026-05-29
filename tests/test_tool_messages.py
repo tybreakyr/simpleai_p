@@ -214,6 +214,39 @@ class TestGeminiToolMessages(unittest.TestCase):
         finally:
             ctx.stop()
 
+    def test_replays_thought_signature_on_function_call(self):
+        p, types, ctx = self._provider_and_types()
+        try:
+            req = ChatRequest(messages=[
+                Message(role="user", content="go"),
+                Message(role="assistant", content="", tool_calls=[
+                    ToolCall(id="a", name="t", arguments={}, thought_signature=b"sig"),
+                ]),
+            ])
+            p._build_kwargs(req)
+            # The functionCall part must carry the original thought_signature.
+            kwargs = [c.kwargs for c in types.Part.call_args_list]
+            assert any(k.get("thought_signature") == b"sig" for k in kwargs), kwargs
+        finally:
+            ctx.stop()
+
+    def test_parse_captures_thought_signature(self):
+        import types as _t
+        p, _types, ctx = self._provider_and_types()
+        try:
+            fc = _t.SimpleNamespace(id=None, name="get_thing", args={"x": 1})
+            part = _t.SimpleNamespace(function_call=fc, thought_signature=b"sig")
+            content = _t.SimpleNamespace(parts=[part])
+            response = _t.SimpleNamespace(
+                text="", candidates=[_t.SimpleNamespace(content=content)], function_calls=None,
+            )
+            req = ChatRequest(messages=[Message(role="user", content="hi")])
+            parsed = p._parse_response(response, req)
+            assert parsed.tool_calls[0].name == "get_thing"
+            assert parsed.tool_calls[0].thought_signature == b"sig"
+        finally:
+            ctx.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

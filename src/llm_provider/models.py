@@ -91,6 +91,11 @@ class ToolCall:
     id: str
     name: str
     arguments: Dict[str, Any]
+    # Opaque provider-specific data that must be replayed verbatim when this
+    # call is sent back in conversation history. Gemini 3.x uses it to carry a
+    # ``thought_signature`` on the functionCall part (required, or the API 400s).
+    # Other providers leave it None.
+    thought_signature: Optional[Any] = None
 
     def __post_init__(self):
         if not self.name:

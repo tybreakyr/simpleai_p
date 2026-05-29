@@ -161,11 +161,14 @@ class GeminiProvider(BaseProvider[T]):
                 if msg.content:
                     parts.append(types.Part(text=msg.content))
                 for tc in msg.tool_calls:
-                    parts.append(
-                        types.Part(
-                            function_call=types.FunctionCall(name=tc.name, args=tc.arguments)
-                        )
-                    )
+                    part_kwargs = {
+                        "function_call": types.FunctionCall(name=tc.name, args=tc.arguments)
+                    }
+                    # Gemini 3.x requires the original thought_signature to be
+                    # replayed on the functionCall part, or the request 400s.
+                    if getattr(tc, "thought_signature", None) is not None:
+                        part_kwargs["thought_signature"] = tc.thought_signature
+                    parts.append(types.Part(**part_kwargs))
                 contents.append(types.Content(role="model", parts=parts))
             elif msg.role == "tool":
                 contents.append(
@@ -237,20 +240,46 @@ class GeminiProvider(BaseProvider[T]):
         message_content: str = response.text or ""
         
         from ..models import ToolCall
+
+        def _coerce_args(args):
+            if hasattr(args, "items"):
+                return dict(args.items())
+            if isinstance(args, dict):
+                return args
+            try:
+                import json
+                return json.loads(args) if isinstance(args, str) else {}
+            except Exception:
+                return {}
+
+        # Prefer iterating candidate parts so we can capture each functionCall
+        # part's thought_signature — Gemini 3.x requires it to be echoed back
+        # when the call is replayed in conversation history.
         tool_calls = []
-        if getattr(response, "function_calls", None):
+        parts = []
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            content = getattr(candidates[0], "content", None)
+            parts = getattr(content, "parts", None) or []
+        for part in parts:
+            fc = getattr(part, "function_call", None)
+            if not fc:
+                continue
+            tool_calls.append(ToolCall(
+                id=getattr(fc, "id", None) or ToolCall.make_id(),
+                name=fc.name,
+                arguments=_coerce_args(fc.args),
+                thought_signature=getattr(part, "thought_signature", None),
+            ))
+
+        # Fallback: flattened convenience accessor (no signature available).
+        if not tool_calls and getattr(response, "function_calls", None):
             for fc in response.function_calls:
-                call_id = getattr(fc, "id", None) or ToolCall.make_id()
-                args = fc.args
-                if hasattr(args, "items"):
-                    args = dict(args.items())
-                elif not isinstance(args, dict):
-                    try:
-                        import json
-                        args = json.loads(args) if isinstance(args, str) else {}
-                    except Exception:
-                        args = {}
-                tool_calls.append(ToolCall(id=call_id, name=fc.name, arguments=args))
+                tool_calls.append(ToolCall(
+                    id=getattr(fc, "id", None) or ToolCall.make_id(),
+                    name=fc.name,
+                    arguments=_coerce_args(fc.args),
+                ))
 
         structured_data: Optional[T] = None
         if request.structured_output_type and not tool_calls:
