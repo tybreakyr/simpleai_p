@@ -166,6 +166,41 @@ if response.tool_calls:
 
 > **Ollama note:** Ollama has no native required-tool mode. When `tool_choice="required"` (or `"any"`) is used with Ollama and the first response contains no tool call, the provider automatically retries with a stricter system-prompt nudge. If the retry also returns no tool call, `InvalidResponseError` is raised.
 
+### Multi-turn Tool Loops (tool results)
+
+To run an agentic loop — the model calls a tool, you execute it, feed the result
+back, and let the model continue — replay the exchange using two extra `Message`
+shapes. Roles map to each provider's native wire format automatically.
+
+- An **assistant** turn that invoked tools carries `tool_calls` (echo back the
+  `ToolCall` objects from `response.tool_calls`; `content` may be empty).
+- A **tool-result** turn uses `role="tool"` with `tool_call_id` (the id of the
+  call it answers), optional `name`, and the stringified result in `content`.
+
+```python
+from llm_provider import ChatRequest, Message
+
+messages = [Message(role="user", content="What's the weather in London?")]
+
+response = provider.chat(ChatRequest(messages=messages, tools=tools, tool_choice="auto"))
+
+if response.tool_calls:
+    call = response.tool_calls[0]
+    # 1. Record the model's tool-call turn verbatim.
+    messages.append(Message(role="assistant", content=response.message, tool_calls=response.tool_calls))
+    # 2. Execute the tool and feed the result back.
+    result = get_weather(**call.arguments)  # your function
+    messages.append(Message(role="tool", content=str(result), tool_call_id=call.id, name=call.name))
+    # 3. Continue — the model now narrates/acts on the result.
+    final = provider.chat(ChatRequest(messages=messages, tools=tools, tool_choice="auto"))
+    print(final.message)
+```
+
+> **Gemini note:** Gemini 3.x requires the opaque `thought_signature` on a
+> replayed `functionCall` part. It is captured into `ToolCall.thought_signature`
+> on parse and replayed automatically when you echo the call back — no caller
+> action needed. (Other providers leave the field `None`.)
+
 ### Per-request Provider Passthrough (`extra_body`)
 
 `ChatRequest` accepts an `extra_body` dict that lets you pass provider-specific parameters on a per-request basis without touching `ProviderConfig`. Keys must be one of the known provider names (`"anthropic"`, `"openai"`, `"gemini"`, `"ollama"`); unknown keys raise `ValueError` at construction time to catch typos early. Each provider merges only its own bucket — other buckets are silently dropped.
