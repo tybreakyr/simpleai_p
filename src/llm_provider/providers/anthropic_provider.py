@@ -35,7 +35,7 @@ from ..provider import Provider
 from ..errors import (
     ConnectionFailedError, TimeoutError,
     RateLimitExceededError, ModelNotAvailableError,
-    LLMError, ErrorType,
+    LLMError, ErrorType, JSONParseFailedError,
 )
 from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
@@ -44,6 +44,11 @@ from .base_provider import BaseProvider
 T = TypeVar('T')
 
 _DEFAULT_MAX_TOKENS = 8192
+
+# Anthropic has no native JSON-schema response_format, so schema-driven
+# structured output is enforced by forcing a single synthetic tool whose
+# input_schema is the requested schema and reading its arguments back.
+_STRUCTURED_OUTPUT_TOOL = "emit_structured_output"
 
 
 class AnthropicProvider(BaseProvider[T]):
@@ -117,7 +122,15 @@ class AnthropicProvider(BaseProvider[T]):
         if request.top_p is not None:
             kwargs["top_p"] = request.top_p
 
-        if request.tools:
+        if request.response_schema is not None:
+            # Force a single synthetic tool to enforce the schema.
+            kwargs["tools"] = [{
+                "name": _STRUCTURED_OUTPUT_TOOL,
+                "description": "Return the result as a structured object matching the schema.",
+                "input_schema": request.response_schema,
+            }]
+            kwargs["tool_choice"] = {"type": "tool", "name": _STRUCTURED_OUTPUT_TOOL}
+        elif request.tools:
             kwargs["tools"] = [
                 {
                     "name": tool.name,
@@ -126,7 +139,7 @@ class AnthropicProvider(BaseProvider[T]):
                 }
                 for tool in request.tools
             ]
-        if request.tool_choice:
+        if request.tool_choice and request.response_schema is None:
             if request.tool_choice in ("auto", "any"):
                 kwargs["tool_choice"] = {"type": request.tool_choice}
             else:
@@ -152,7 +165,21 @@ class AnthropicProvider(BaseProvider[T]):
                 tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
 
         structured_data: Optional[T] = None
-        if request.structured_output_type and not tool_calls:
+        if request.response_schema is not None:
+            # The forced synthetic tool carries the structured result in its
+            # arguments. Surface it as structured_data and hide the tool call.
+            emitted = next(
+                (tc for tc in tool_calls if tc.name == _STRUCTURED_OUTPUT_TOOL),
+                None,
+            )
+            if emitted is None:
+                raise JSONParseFailedError(
+                    "Anthropic did not emit the structured-output tool call",
+                    operation="chat",
+                )
+            structured_data = emitted.arguments
+            tool_calls = []
+        elif request.structured_output_type and not tool_calls:
             try:
                 structured_data = parse_structured_output(
                     message_content, request.structured_output_type
@@ -181,7 +208,6 @@ class AnthropicProvider(BaseProvider[T]):
         return self._execute_with_retry(_chat, "chat")
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
-        from ..retry import _async_retry_with_backoff
         if not hasattr(self, "_async_client"):
             from anthropic import AsyncAnthropic
             self._async_client = AsyncAnthropic(
@@ -200,7 +226,7 @@ class AnthropicProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_anthropic_error(e)
 
-        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
+        return await self._arun_with_limit(_achat, "achat")
 
     def list_models(self) -> List[Model]:
         def _list_models() -> List[Model]:
@@ -313,6 +339,7 @@ def create_anthropic_provider(config_dict: Dict[str, Any]) -> Provider:
     timeout = float(config_dict.get("timeout", 60.0))
     retry_attempts = int(config_dict.get("retry_attempts", 3))
     rate_limit = config_dict.get("rate_limit")
+    max_concurrent = config_dict.get("max_concurrent")
     extra_settings = config_dict.get("extra_settings", {})
 
     if not api_key:
@@ -325,6 +352,7 @@ def create_anthropic_provider(config_dict: Dict[str, Any]) -> Provider:
         retry_attempts=retry_attempts,
         api_key=api_key,
         rate_limit=rate_limit,
+        max_concurrent=max_concurrent,
         extra_settings=extra_settings,
     )
 

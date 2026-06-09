@@ -122,6 +122,13 @@ class ChatRequest(Generic[T]):
     top_p: Optional[float] = None
     tools: Optional[List[ToolSchema]] = None
     tool_choice: Optional[str] = None  # "auto" | "any" | "required" | "none" | tool name
+    # Raw JSON Schema (dict) for schema-driven structured output. Each provider
+    # maps this to its native enforcement mechanism (OpenAI response_format,
+    # Gemini response_schema, Ollama format, Anthropic forced tool) and returns
+    # the decoded object as a plain dict in ``ChatResponse.structured_data``.
+    # Mutually exclusive with caller-supplied ``tools`` (the Anthropic path
+    # needs the tool slot to enforce the schema).
+    response_schema: Optional[Dict[str, Any]] = None
     # Per-provider passthrough into the outgoing request body. Top-level keys
     # must be one of the known provider names; unknown keys raise ValueError
     # so typos don't silently no-op. Each provider merges its own bucket into
@@ -134,6 +141,13 @@ class ChatRequest(Generic[T]):
             raise ValueError("Chat request must contain at least one message")
         if self.tool_choice == "required":
             self.tool_choice = "any"
+        if self.response_schema is not None:
+            if not isinstance(self.response_schema, dict):
+                raise ValueError("response_schema must be a dict (JSON Schema)")
+            if self.tools:
+                raise ValueError(
+                    "response_schema cannot be combined with caller-supplied tools"
+                )
         if self.extra_body is not None:
             if not isinstance(self.extra_body, dict):
                 raise ValueError("extra_body must be a dict of provider-name -> dict")
@@ -205,6 +219,10 @@ class ProviderConfig:
     retry_attempts: int = 3
     api_key: Optional[str] = None
     rate_limit: Optional[int] = None  # requests per minute
+    # Cap on concurrent in-flight async requests (asyncio.Semaphore). Useful for
+    # single-model local servers (mlx-lm, ollama) that serialise requests.
+    # None / <=0 means unlimited.
+    max_concurrent: Optional[int] = None
     extra_settings: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):

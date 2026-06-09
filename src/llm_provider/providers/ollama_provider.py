@@ -34,6 +34,10 @@ from .base_provider import BaseProvider
 
 T = TypeVar('T')
 
+# extra_settings keys this library interprets itself rather than forwarding as
+# top-level Ollama payload fields (which would be ignored, or worse, rejected).
+_CONTROL_EXTRA_SETTINGS = frozenset({"disable_thinking", "structured_output_format"})
+
 
 class OllamaProvider(BaseProvider[T]):
     """
@@ -61,8 +65,11 @@ class OllamaProvider(BaseProvider[T]):
     
     def _build_payload(self, request: ChatRequest[T]) -> Dict[str, Any]:
         messages = []
-        if request.system_prompt:
-            messages.append({"role": "system", "content": request.system_prompt.content})
+        system_content = self._maybe_no_think(
+            request.system_prompt.content if request.system_prompt else None
+        )
+        if system_content:
+            messages.append({"role": "system", "content": system_content})
         for msg in request.messages:
             if msg.role == "assistant" and msg.tool_calls:
                 messages.append({
@@ -104,7 +111,15 @@ class OllamaProvider(BaseProvider[T]):
 
         if self._config.extra_settings:
             for key, value in self._config.extra_settings.items():
+                # Control keys consumed by this library (not Ollama wire fields).
+                if key in _CONTROL_EXTRA_SETTINGS:
+                    continue
                 payload[key] = value
+
+        if request.response_schema is not None:
+            # Ollama enforces structured output natively via the `format` field,
+            # which accepts a full JSON Schema.
+            payload["format"] = request.response_schema
 
         if request.tools:
             payload["tools"] = [
@@ -148,7 +163,9 @@ class OllamaProvider(BaseProvider[T]):
                 ))
 
         structured_data: Optional[T] = None
-        if request.structured_output_type and not tool_calls:
+        if request.response_schema is not None and not tool_calls:
+            structured_data = self._decode_structured_dict(message_content)
+        elif request.structured_output_type and not tool_calls:
             try:
                 structured_data = parse_structured_output(
                     message_content,
@@ -190,6 +207,7 @@ class OllamaProvider(BaseProvider[T]):
             messages=list(request.messages),
             system_prompt=new_sp,
             structured_output_type=request.structured_output_type,
+            response_schema=request.response_schema,
             model=request.model,
             temperature=request.temperature,
             top_p=request.top_p,
@@ -261,9 +279,8 @@ class OllamaProvider(BaseProvider[T]):
         return result
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
-        from ..retry import _async_retry_with_backoff
         import httpx
-        
+
         if not hasattr(self, "_async_client"):
             headers = {"Authorization": f"Bearer {self._config.api_key}"} if self._config.api_key else {}
             self._async_client = httpx.AsyncClient(
@@ -319,13 +336,13 @@ class OllamaProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_and_raise_error(e, "achat")
 
-        result = await _async_retry_with_backoff(
-            lambda: _achat_for(request), self._retry_config, "achat"
+        result = await self._arun_with_limit(
+            lambda: _achat_for(request), "achat"
         )
         if self._needs_required_emulation(request, result):
             nudged = self._with_required_nudge(request)
-            result = await _async_retry_with_backoff(
-                lambda: _achat_for(nudged), self._retry_config, "achat"
+            result = await self._arun_with_limit(
+                lambda: _achat_for(nudged), "achat"
             )
             if not result.tool_calls:
                 raise InvalidResponseError(
@@ -435,12 +452,13 @@ def create_ollama_provider(config_dict: Dict[str, Any]) -> Provider:
     retry_attempts = config_dict.get("retry_attempts", 3)
     api_key = config_dict.get("api_key")
     rate_limit = config_dict.get("rate_limit")
+    max_concurrent = config_dict.get("max_concurrent")
     extra_settings = config_dict.get("extra_settings", {})
-    
+
     # Validate required fields
     if not default_model:
         raise ValueError("Ollama provider requires 'default_model' in configuration")
-    
+
     # Create ProviderConfig
     provider_config = ProviderConfig(
         host=host,
@@ -449,6 +467,7 @@ def create_ollama_provider(config_dict: Dict[str, Any]) -> Provider:
         retry_attempts=retry_attempts,
         api_key=api_key,
         rate_limit=rate_limit,
+        max_concurrent=max_concurrent,
         extra_settings=extra_settings
     )
     
