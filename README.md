@@ -128,6 +128,49 @@ if response.structured_data:
     print(f"Name: {person.name}, Age: {person.age}")
 ```
 
+`structured_output_type` relies on prompting + robust JSON extraction. For
+**provider-enforced** structured output, pass a raw JSON Schema via
+`response_schema` instead — each provider maps it to its native mechanism and
+returns the decoded object as a plain `dict` in `response.structured_data`:
+
+| Provider | Native enforcement |
+|----------|--------------------|
+| OpenAI / mlx | `response_format` (`json_schema`, or `json_object` when `extra_settings["structured_output_format"]="json_object"`) |
+| Gemini | `response_mime_type="application/json"` + `response_schema` |
+| Ollama | `format=<schema>` |
+| Anthropic | a forced single synthetic tool (no native JSON-schema mode) |
+
+```python
+schema = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+request = ChatRequest(
+    messages=[Message(role="user", content="Extract: John Doe, 30")],
+    response_schema=schema,          # mutually exclusive with `tools`
+    temperature=0.0,
+)
+response = provider.chat(request)
+person: dict = response.structured_data   # {"name": "John Doe", "age": 30}
+```
+
+If the model returns text that can't be decoded to JSON, a retryable
+`JSONParseFailedError` is raised so the retry layer re-rolls the call.
+
+### Model & concurrency controls
+
+Two `ProviderConfig` knobs cover common local-model needs:
+
+- `max_concurrent`: cap concurrent in-flight async requests (an `asyncio.Semaphore`),
+  useful for single-model servers like mlx-lm / Ollama that serialise requests.
+- `extra_settings["disable_thinking"]`: when `True` and the model name contains
+  `qwen3`, prepend `/no_think` to the system prompt (a no-op for other models).
+
+The `create_mlx_provider` factory wraps the OpenAI provider with mlx-lm-friendly
+defaults (`base_url=http://localhost:8000/v1`, `structured_output_format="json_object"`,
+placeholder `api_key="mlx-lm"`).
+
 ### Tool Calling
 
 Providers support native tool calling (function calling) where available.

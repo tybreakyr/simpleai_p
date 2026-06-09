@@ -201,6 +201,12 @@ class GeminiProvider(BaseProvider[T]):
         if system_instruction:
             gen_cfg_kwargs["system_instruction"] = system_instruction
             
+        if request.response_schema is not None:
+            gen_cfg_kwargs["response_mime_type"] = "application/json"
+            gen_cfg_kwargs["response_schema"] = _sanitize_schema_for_gemini(
+                request.response_schema
+            )
+
         if request.tools:
             gen_cfg_kwargs["tools"] = [
                 {
@@ -282,7 +288,9 @@ class GeminiProvider(BaseProvider[T]):
                 ))
 
         structured_data: Optional[T] = None
-        if request.structured_output_type and not tool_calls:
+        if request.response_schema is not None and not tool_calls:
+            structured_data = self._decode_structured_dict(message_content)
+        elif request.structured_output_type and not tool_calls:
             try:
                 structured_data = parse_structured_output(
                     message_content, request.structured_output_type
@@ -334,8 +342,6 @@ class GeminiProvider(BaseProvider[T]):
         return self._execute_with_retry(_chat, "chat")
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
-        from ..retry import _async_retry_with_backoff
-            
         async def _achat() -> ChatResponse[T]:
             self._enforce_rate_limit()
             model_name, contents, gen_config = self._build_kwargs(request)
@@ -367,7 +373,7 @@ class GeminiProvider(BaseProvider[T]):
                     ) from e
                 self._classify_and_raise_error(e, "achat")
 
-        return await _async_retry_with_backoff(_achat, self._retry_config, "achat")
+        return await self._arun_with_limit(_achat, "achat")
 
     def list_models(self) -> List[Model]:
         """List Gemini models that support content generation."""
@@ -430,6 +436,7 @@ def create_gemini_provider(config_dict: Dict[str, Any]) -> Provider:
     timeout = float(config_dict.get("timeout", 60.0))
     retry_attempts = int(config_dict.get("retry_attempts", 3))
     rate_limit = config_dict.get("rate_limit")
+    max_concurrent = config_dict.get("max_concurrent")
     extra_settings = config_dict.get("extra_settings", {})
 
     if not api_key:
@@ -444,6 +451,7 @@ def create_gemini_provider(config_dict: Dict[str, Any]) -> Provider:
         retry_attempts=retry_attempts,
         api_key=api_key,
         rate_limit=rate_limit,
+        max_concurrent=max_concurrent,
         extra_settings=extra_settings,
     )
 
