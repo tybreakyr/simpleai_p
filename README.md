@@ -8,6 +8,7 @@ A lightweight Python library that provides a unified abstraction layer for inter
 - **Provider Abstraction**: Switch between providers without changing your code
 - **Error Handling**: Comprehensive error handling with retry logic
 - **Structured Output**: Robust JSON extraction and native tool-calling capabilities.
+- **Model-Aware Tool Schemas**: Automatically flatten nested tool parameters for models that can't handle them (e.g. small local Qwen models) and re-nest the response — callers always declare the natural nested schema.
 - **Async Support**: Native `asyncio` support across all providers (`achat`).
 - **Retry Mechanism**: Configurable exponential backoff retry logic (sync and async).
 - **Thread-Safe**: Factory pattern with thread-safe provider and model caching.
@@ -209,6 +210,39 @@ if response.tool_calls:
 
 > **Ollama note:** Ollama has no native required-tool mode. When `tool_choice="required"` (or `"any"`) is used with Ollama and the first response contains no tool call, the provider automatically retries with a stricter system-prompt nudge. If the retry also returns no tool call, `InvalidResponseError` is raised.
 
+### Nested tool parameters & per-model capabilities
+
+Some models — notably small local ones such as Qwen3-family — mishandle **nested
+objects** in tool-call parameters (they error or drop fields under load). Rather
+than forcing every caller to hand-flatten such schemas, the library does it
+automatically based on a small **per-model capability registry**:
+
+- A tool whose `input_schema` contains a fixed-key nested object is **flattened
+  on the wire** (`say: {text, determination}` → `say__text`, `say__determination`)
+  before the request is sent, and the returned arguments are **re-nested** before
+  they reach you. You declare — and receive — the natural nested shape.
+- Only fixed-key objects flatten. Scalars, enums, arrays (including
+  arrays-of-objects), and `additionalProperties` maps pass through untouched, so
+  batch/map tool schemas are never altered. Tool names and `tool_choice` are
+  preserved, so forced-tool behaviour is unaffected.
+- The decision is per **model name** (`ChatRequest.model` or
+  `ProviderConfig.default_model`), so the same provider can serve a weak model and
+  a capable one. The registry lives in `llm_provider.model_capabilities`
+  (`supports_nested_tool_params(name)`); unknown models are assumed capable.
+
+```python
+from llm_provider import supports_nested_tool_params
+
+supports_nested_tool_params("gpt-4o")                            # True  → schema sent as-is
+supports_nested_tool_params("mlx-community/Qwen3.5-9B-MLX-4bit") # False → auto-flattened
+```
+
+Override the decision per provider with
+`extra_settings["flatten_tool_params"] = True | False` (beats the registry in
+either direction). The pure codec is also exposed directly:
+`flatten_tool_schema(schema) -> (flat_schema, mapping)` and
+`renest_arguments(flat_args, mapping)`.
+
 ### Multi-turn Tool Loops (tool results)
 
 To run an agentic loop — the model calls a tool, you execute it, feed the result
@@ -321,7 +355,8 @@ else:
 - `ToolSchema`: Definition of an available tool (function)
 - `ToolCall`: A tool invocation requested by the model
 - `Model`: Represents an available LLM model
-- `ProviderFeatures`: Describes provider capabilities
+- `ProviderFeatures`: Describes provider capabilities (per provider)
+- `ModelCapabilities`: Per-model quirks (e.g. `supports_nested_tool_params`); drives automatic tool-schema flattening
 - `ProviderConfig`: Configuration for a provider instance
 - `FactoryConfig`: Configuration for the provider factory
 

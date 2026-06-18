@@ -3,13 +3,16 @@ Base provider helper class for common provider implementation patterns.
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TypeVar, Generic, Callable, Type
+import dataclasses
+from typing import Dict, Any, List, Optional, Tuple, TypeVar, Generic, Callable, Type
 from abc import ABC
 
-from ..models import ChatRequest, ChatResponse, ProviderConfig, ProviderFeatures
+from ..models import ChatRequest, ChatResponse, ProviderConfig, ToolCall, ToolSchema
 from ..provider import Provider
 from ..retry import RetryConfig, retry_with_backoff
 from ..json_extractor import parse_structured_output, extract_json
+from ..model_capabilities import supports_nested_tool_params
+from ..schema_transform import flatten_tool_schema, renest_arguments, FlattenMapping
 from ..errors import (
     LLMError, classify_error, ConnectionFailedError, TimeoutError,
     JSONParseFailedError,
@@ -110,6 +113,83 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
         if "qwen3" not in (self._config.default_model or "").lower():
             return system_content
         return "/no_think\n" + (system_content or "")
+
+    # ------------------------------------------------------------------
+    # Nested→flat tool-param adaptation (for models that can't handle
+    # nested tool-call parameters). Request-local: the mapping is computed
+    # and consumed within a single chat/achat call, so concurrent calls
+    # never share state. See ``schema_transform`` / ``model_capabilities``.
+    # ------------------------------------------------------------------
+
+    def _should_flatten_tool_params(self, model_name: Optional[str]) -> bool:
+        """Whether to flatten nested tool params for this model.
+
+        An explicit ``extra_settings["flatten_tool_params"]`` (bool) overrides the
+        per-model registry in either direction; otherwise fall back to the model's
+        registered capability.
+        """
+        override = self._config.extra_settings.get("flatten_tool_params")
+        if override is not None:
+            return bool(override)
+        return not supports_nested_tool_params(model_name)
+
+    def _maybe_flatten_tools(
+        self, request: ChatRequest[T]
+    ) -> Tuple[ChatRequest[T], Dict[str, FlattenMapping]]:
+        """Flatten nested tool schemas when the target model needs it.
+
+        Returns a (possibly rewritten) request plus ``{tool_name: mapping}`` for
+        re-nesting the response. Tool names and ``tool_choice`` are never altered,
+        so forced-tool behavior is preserved. A no-op (returns the request as-is
+        with an empty mapping) when there are no tools, the model is capable, or no
+        tool actually has flattenable nesting.
+        """
+        if not request.tools:
+            return request, {}
+        model = request.model or self._config.default_model
+        if not self._should_flatten_tool_params(model):
+            return request, {}
+
+        new_tools: List[ToolSchema] = []
+        mappings: Dict[str, FlattenMapping] = {}
+        changed = False
+        for tool in request.tools:
+            flat_schema, mapping = flatten_tool_schema(tool.input_schema)
+            if mapping:
+                changed = True
+                mappings[tool.name] = mapping
+                new_tools.append(
+                    ToolSchema(
+                        name=tool.name,
+                        description=tool.description,
+                        input_schema=flat_schema,
+                    )
+                )
+            else:
+                new_tools.append(tool)
+
+        if not changed:
+            return request, {}
+        return dataclasses.replace(request, tools=new_tools), mappings
+
+    def _maybe_renest_tool_calls(
+        self, response: ChatResponse[T], mappings: Dict[str, FlattenMapping]
+    ) -> ChatResponse[T]:
+        """Re-nest flattened tool-call arguments using the per-tool mappings."""
+        if not mappings or not response.tool_calls:
+            return response
+        restored = [
+            ToolCall(
+                id=tc.id,
+                name=tc.name,
+                arguments=renest_arguments(tc.arguments, mappings[tc.name]),
+                thought_signature=tc.thought_signature,
+            )
+            if tc.name in mappings
+            else tc
+            for tc in response.tool_calls
+        ]
+        return dataclasses.replace(response, tool_calls=restored)
 
     def _decode_structured_dict(self, text: str) -> Dict[str, Any]:
         """Decode a JSON object from response text for ``response_schema`` calls.

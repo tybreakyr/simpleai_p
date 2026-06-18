@@ -45,6 +45,18 @@ from .errors import (
 from .json_extractor import extract_json, parse_structured_output
 from .retry import RetryConfig, retry_with_backoff, retryable
 
+# Model capabilities + tool-schema flattening codec
+from .model_capabilities import (
+    ModelCapabilities,
+    get_model_capabilities,
+    supports_nested_tool_params,
+)
+from .schema_transform import (
+    flatten_tool_schema,
+    renest_arguments,
+    schema_has_flattenable_nesting,
+)
+
 # Configuration
 from .config import (
     validate_factory_config,
@@ -103,7 +115,15 @@ __all__ = [
     "RetryConfig",
     "retry_with_backoff",
     "retryable",
-    
+
+    # Model capabilities + schema codec
+    "ModelCapabilities",
+    "get_model_capabilities",
+    "supports_nested_tool_params",
+    "flatten_tool_schema",
+    "renest_arguments",
+    "schema_has_flattenable_nesting",
+
     # Configuration
     "validate_factory_config",
     "validate_provider_config",
