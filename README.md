@@ -668,3 +668,10 @@ MIT License
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+Pull requests run an LLM **doc-drift check** (`.github/workflows/docs-check.yml`,
+`anthropics/claude-code-action`): it inspects the PR diff and, if this README or
+other docs lag the code, **pushes verified doc-fix commits straight to the PR
+branch**. Because the bot commits to the branch, always `git fetch` + rebase
+before pushing more work to an open PR — **never force-push over its commits.**
+The check needs the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (already configured).
+
