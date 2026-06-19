@@ -222,6 +222,8 @@ class OpenAIProvider(BaseProvider[T]):
         )
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
+        request, _flat_map = self._maybe_flatten_tools(request)
+
         def _chat() -> ChatResponse[T]:
             kwargs = self._build_kwargs(request)
             try:
@@ -232,7 +234,9 @@ class OpenAIProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_openai_error(e)
 
-        return self._execute_with_retry(_chat, "chat")
+        return self._maybe_renest_tool_calls(
+            self._execute_with_retry(_chat, "chat"), _flat_map
+        )
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         if not hasattr(self, "_async_client"):
@@ -244,7 +248,9 @@ class OpenAIProvider(BaseProvider[T]):
                 timeout=self._config.timeout,
                 max_retries=0,
             )
-            
+
+        request, _flat_map = self._maybe_flatten_tools(request)
+
         async def _achat() -> ChatResponse[T]:
             kwargs = self._build_kwargs(request)
             try:
@@ -255,7 +261,9 @@ class OpenAIProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_openai_error(e)
 
-        return await self._arun_with_limit(_achat, "achat")
+        return self._maybe_renest_tool_calls(
+            await self._arun_with_limit(_achat, "achat"), _flat_map
+        )
 
     def list_models(self) -> List[Model]:
         def _list_models() -> List[Model]:

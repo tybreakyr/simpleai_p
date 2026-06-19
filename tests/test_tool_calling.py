@@ -538,5 +538,121 @@ class TestOllamaToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(ids)), 2, "Multiple tool calls must get unique IDs")
 
 
+# ─── Nested→flat tool-param adaptation (per-model capability) ─────────────────
+
+def _openai_provider_for_model(default_model, extra_settings=None):
+    with patch.dict(sys.modules, {"openai": MagicMock()}):
+        from llm_provider.providers.openai_provider import OpenAIProvider
+        p = OpenAIProvider.__new__(OpenAIProvider)
+    p._config = ProviderConfig(
+        host="https://api.openai.com/v1",
+        default_model=default_model,
+        api_key="test-key",
+        extra_settings=extra_settings or {},
+    )
+    p._client = MagicMock()
+    p._retry_config = _retry_cfg()
+    return p
+
+
+def _nested_tool():
+    return ToolSchema(
+        name="submit",
+        description="submit a nested payload",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "say": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}, "determination": {"type": "integer"}},
+                    "required": ["text", "determination"],
+                },
+            },
+            "required": ["say"],
+        },
+    )
+
+
+def _openai_tool_completion(name, args):
+    fn = MagicMock()
+    fn.name = name
+    fn.arguments = json.dumps(args)
+    tc = MagicMock(id="call_1", type="function", function=fn)
+    choice = MagicMock()
+    choice.message.content = ""
+    choice.message.tool_calls = [tc]
+    choice.finish_reason = "tool_calls"
+    r = MagicMock()
+    r.choices = [choice]
+    return r
+
+
+class TestNestedToolParamFlattening(unittest.TestCase):
+    def test_weak_model_gets_flat_schema_and_renested_args(self):
+        provider = _openai_provider_for_model("mlx-community/Qwen3.5-9B-MLX-4bit")
+        # The model "sees" flat args and answers in the flat shape.
+        provider._client.chat.completions.create.return_value = _openai_tool_completion(
+            "submit", {"say__text": "hi", "say__determination": 80}
+        )
+
+        resp = provider.chat(ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_nested_tool()],
+            tool_choice="submit",
+        ))
+
+        # Wire schema sent to the SDK is flattened (no nested object property).
+        kwargs = provider._client.chat.completions.create.call_args.kwargs
+        params = kwargs["tools"][0]["function"]["parameters"]
+        self.assertEqual(set(params["properties"]), {"say__text", "say__determination"})
+        # Forced-tool name is preserved.
+        self.assertEqual(kwargs["tool_choice"], {"type": "function", "function": {"name": "submit"}})
+        # Returned args are re-nested for the caller.
+        self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
+
+    def test_capable_model_passes_nested_schema_through(self):
+        provider = _openai_provider_for_model("gpt-4o")
+        provider._client.chat.completions.create.return_value = _openai_tool_completion(
+            "submit", {"say": {"text": "hi", "determination": 80}}
+        )
+        resp = provider.chat(ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_nested_tool()],
+        ))
+        kwargs = provider._client.chat.completions.create.call_args.kwargs
+        params = kwargs["tools"][0]["function"]["parameters"]
+        self.assertIn("say", params["properties"])
+        self.assertEqual(params["properties"]["say"]["type"], "object")
+        # Args unchanged (already nested).
+        self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
+
+    def test_extra_settings_override_forces_flatten_on_capable_model(self):
+        provider = _openai_provider_for_model("gpt-4o", extra_settings={"flatten_tool_params": True})
+        provider._client.chat.completions.create.return_value = _openai_tool_completion(
+            "submit", {"say__text": "hi", "say__determination": 80}
+        )
+        resp = provider.chat(ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_nested_tool()],
+        ))
+        kwargs = provider._client.chat.completions.create.call_args.kwargs
+        params = kwargs["tools"][0]["function"]["parameters"]
+        self.assertEqual(set(params["properties"]), {"say__text", "say__determination"})
+        self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
+
+    def test_override_can_disable_flatten_on_weak_model(self):
+        provider = _openai_provider_for_model("qwen3", extra_settings={"flatten_tool_params": False})
+        provider._client.chat.completions.create.return_value = _openai_tool_completion(
+            "submit", {"say": {"text": "hi", "determination": 80}}
+        )
+        provider.chat(ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            tools=[_nested_tool()],
+        ))
+        kwargs = provider._client.chat.completions.create.call_args.kwargs
+        params = kwargs["tools"][0]["function"]["parameters"]
+        self.assertIn("say", params["properties"])  # left nested
+
+
 if __name__ == '__main__':
     unittest.main()

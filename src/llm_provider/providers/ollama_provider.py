@@ -218,6 +218,8 @@ class OllamaProvider(BaseProvider[T]):
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         """Send a chat request to Ollama."""
+        request, _flat_map = self._maybe_flatten_tools(request)
+
         def _chat_for(req: ChatRequest[T]) -> ChatResponse[T]:
             payload = self._build_payload(req)
             url = f"{self._base_url}/chat"
@@ -276,7 +278,7 @@ class OllamaProvider(BaseProvider[T]):
                     "Ollama did not return a tool call after required-mode retry",
                     operation="chat",
                 )
-        return result
+        return self._maybe_renest_tool_calls(result, _flat_map)
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         import httpx
@@ -287,7 +289,9 @@ class OllamaProvider(BaseProvider[T]):
                 headers=headers,
                 timeout=self._config.timeout,
             )
-            
+
+        request, _flat_map = self._maybe_flatten_tools(request)
+
         async def _achat_for(req: ChatRequest[T]) -> ChatResponse[T]:
             payload = self._build_payload(req)
             url = f"{self._base_url}/chat"
@@ -349,7 +353,7 @@ class OllamaProvider(BaseProvider[T]):
                     "Ollama did not return a tool call after required-mode retry",
                     operation="achat",
                 )
-        return result
+        return self._maybe_renest_tool_calls(result, _flat_map)
     
     def list_models(self) -> List[Model]:
         """List available models from Ollama."""
