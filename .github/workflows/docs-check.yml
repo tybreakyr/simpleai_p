@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   docs-check:
+    # Don't re-run on the doc-fix bot's own commits: claude-code-action errors
+    # on a bot actor, and re-checking the fix it just pushed is pointless.
+    if: ${{ github.actor != 'claude[bot]' && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR branch
