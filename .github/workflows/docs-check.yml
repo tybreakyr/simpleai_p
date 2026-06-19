@@ -1,0 +1,53 @@
+name: Docs check on PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Allow Claude to read the PR and push doc fixes back to the branch.
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  actions: read
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Check and update docs
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Commit via GitHub's API (verified commits) so Claude doesn't need
+          # raw Bash git access. track_progress posts/updates a status comment.
+          use_commit_signing: true
+          track_progress: true
+          claude_args: |
+            --allowedTools "Read,Edit,Write,Glob,Grep,mcp__github_file_ops__commit_files"
+          prompt: |
+            You are reviewing the changes in this pull request specifically for
+            documentation drift in simpleai_p — a lightweight LLM provider
+            abstraction library (the llm-provider package). Relevant docs: the
+            README, any CLAUDE.md or docs/ pages, and inline docstrings.
+
+            Steps:
+            1. Inspect this PR's diff (the code/config that changed).
+            2. Decide whether any documentation needs updating as a result:
+               - README, CLAUDE.md, docs/ pages, or inline docstrings that
+                 describe behavior, the public API, provider config, env vars, or
+                 structure that this PR changed.
+            3. If docs are already correct, make no changes and briefly state that
+               docs look up to date.
+            4. If docs are stale or missing, edit the relevant files to match the
+               code changes and commit them to this PR's branch using the
+               commit_files tool. Summarize what you updated and why.
+
+            Keep doc changes minimal and scoped to what this PR actually changed.
+            Do not modify application code.
