@@ -3,16 +3,16 @@ Core data structures for the LLM provider abstraction library.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Any, TypeVar, Generic
-from enum import Enum
+from enum import StrEnum
+from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
+T = TypeVar("T")
 
-T = TypeVar('T')
 
-
-class MessageRole(str, Enum):
+class MessageRole(StrEnum):
     """Message roles in a conversation."""
+
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -35,11 +35,12 @@ class Message:
 
     Providers translate these neutral fields into their native wire format.
     """
+
     role: str
     content: str
-    tool_calls: Optional[List["ToolCall"]] = None
-    tool_call_id: Optional[str] = None
-    name: Optional[str] = None
+    tool_calls: list["ToolCall"] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
 
     def __post_init__(self):
         """Validate message after initialization."""
@@ -54,6 +55,7 @@ class Message:
 @dataclass
 class SystemPrompt:
     """Represents system-level instructions."""
+
     content: str
 
     def __post_init__(self):
@@ -70,9 +72,10 @@ class ToolSchema:
     must supply.  This neutral format is translated to each provider's native
     wire format inside the provider implementation.
     """
+
     name: str
     description: str
-    input_schema: Dict[str, Any]
+    input_schema: dict[str, Any]
 
     def __post_init__(self):
         if not self.name:
@@ -88,14 +91,15 @@ class ToolCall:
     ``id`` is provider-generated for Anthropic/OpenAI; Ollama does not return
     one so the Ollama provider synthesises ``call_<12-hex-chars>`` instead.
     """
+
     id: str
     name: str
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
     # Opaque provider-specific data that must be replayed verbatim when this
     # call is sent back in conversation history. Gemini 3.x uses it to carry a
     # ``thought_signature`` on the functionCall part (required, or the API 400s).
     # Other providers leave it None.
-    thought_signature: Optional[Any] = None
+    thought_signature: Any | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -114,26 +118,27 @@ _KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "ollama"})
 @dataclass
 class ChatRequest(Generic[T]):
     """Input structure for chat operations."""
-    messages: List[Message]
-    system_prompt: Optional[SystemPrompt] = None
-    structured_output_type: Optional[type[T]] = None
-    model: Optional[str] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    tools: Optional[List[ToolSchema]] = None
-    tool_choice: Optional[str] = None  # "auto" | "any" | "required" | "none" | tool name
+
+    messages: list[Message]
+    system_prompt: SystemPrompt | None = None
+    structured_output_type: type[T] | None = None
+    model: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    tools: list[ToolSchema] | None = None
+    tool_choice: str | None = None  # "auto" | "any" | "required" | "none" | tool name
     # Raw JSON Schema (dict) for schema-driven structured output. Each provider
     # maps this to its native enforcement mechanism (OpenAI response_format,
     # Gemini response_schema, Ollama format, Anthropic forced tool) and returns
     # the decoded object as a plain dict in ``ChatResponse.structured_data``.
     # Mutually exclusive with caller-supplied ``tools`` (the Anthropic path
     # needs the tool slot to enforce the schema).
-    response_schema: Optional[Dict[str, Any]] = None
+    response_schema: dict[str, Any] | None = None
     # Per-provider passthrough into the outgoing request body. Top-level keys
     # must be one of the known provider names; unknown keys raise ValueError
     # so typos don't silently no-op. Each provider merges its own bucket into
     # its outgoing payload — other buckets are dropped.
-    extra_body: Optional[Dict[str, Dict[str, Any]]] = None
+    extra_body: dict[str, dict[str, Any]] | None = None
 
     def __post_init__(self):
         """Validate chat request after initialization."""
@@ -145,9 +150,7 @@ class ChatRequest(Generic[T]):
             if not isinstance(self.response_schema, dict):
                 raise ValueError("response_schema must be a dict (JSON Schema)")
             if self.tools:
-                raise ValueError(
-                    "response_schema cannot be combined with caller-supplied tools"
-                )
+                raise ValueError("response_schema cannot be combined with caller-supplied tools")
         if self.extra_body is not None:
             if not isinstance(self.extra_body, dict):
                 raise ValueError("extra_body must be a dict of provider-name -> dict")
@@ -159,18 +162,17 @@ class ChatRequest(Generic[T]):
                 )
             for k, v in self.extra_body.items():
                 if not isinstance(v, dict):
-                    raise ValueError(
-                        f"extra_body[{k!r}] must be a dict; got {type(v).__name__}"
-                    )
+                    raise ValueError(f"extra_body[{k!r}] must be a dict; got {type(v).__name__}")
 
 
 @dataclass
 class ChatResponse(Generic[T]):
     """Output structure from chat operations."""
+
     message: str
-    structured_data: Optional[T] = None
-    tool_calls: Optional[List[ToolCall]] = None
-    stop_reason: Optional[str] = None  # "end_turn" | "tool_use" | "max_tokens"
+    structured_data: T | None = None
+    tool_calls: list[ToolCall] | None = None
+    stop_reason: str | None = None  # "end_turn" | "tool_use" | "max_tokens"
 
     def __post_init__(self):
         """Validate chat response after initialization."""
@@ -181,6 +183,7 @@ class ChatResponse(Generic[T]):
 @dataclass
 class Model:
     """Represents an available LLM model."""
+
     name: str
 
     def __post_init__(self):
@@ -192,11 +195,12 @@ class Model:
 @dataclass
 class ProviderFeatures:
     """Describes provider capabilities."""
+
     structured_output: bool = False
     streaming: bool = False
     vision: bool = False
     context_window: int = 0
-    supported_roles: List[str] = field(default_factory=lambda: ["user", "assistant"])
+    supported_roles: list[str] = field(default_factory=lambda: ["user", "assistant"])
     function_calling: bool = False
     temperature: bool = True
     top_p: bool = True
@@ -213,17 +217,18 @@ class ProviderFeatures:
 @dataclass
 class ProviderConfig:
     """Configuration for a provider instance."""
+
     host: str
     default_model: str
     timeout: float = 30.0
     retry_attempts: int = 3
-    api_key: Optional[str] = None
-    rate_limit: Optional[int] = None  # requests per minute
+    api_key: str | None = None
+    rate_limit: int | None = None  # requests per minute
     # Cap on concurrent in-flight async requests (asyncio.Semaphore). Useful for
     # single-model local servers (mlx-lm, ollama) that serialise requests.
     # None / <=0 means unlimited.
-    max_concurrent: Optional[int] = None
-    extra_settings: Dict[str, Any] = field(default_factory=dict)
+    max_concurrent: int | None = None
+    extra_settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate provider configuration after initialization."""
@@ -242,10 +247,11 @@ class ProviderConfig:
 @dataclass
 class FactoryConfig:
     """Configuration for the provider factory."""
+
     default_provider: str
-    provider_configs: Dict[str, ProviderConfig]
-    model_preferences: Dict[str, str] = field(default_factory=dict)  # task -> model mapping
-    fallback_providers: List[str] = field(default_factory=list)
+    provider_configs: dict[str, ProviderConfig]
+    model_preferences: dict[str, str] = field(default_factory=dict)  # task -> model mapping
+    fallback_providers: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate factory configuration after initialization."""
@@ -257,4 +263,3 @@ class FactoryConfig:
             raise ValueError(
                 f"Factory default provider '{self.default_provider}' must exist in provider_configs"
             )
-

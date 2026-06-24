@@ -17,14 +17,17 @@ import importlib.util
 import sys
 import threading
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-from llm_provider.models import (
-    ChatRequest, Message, SystemPrompt, ToolSchema, ProviderConfig,
-)
 from llm_provider.errors import JSONParseFailedError
+from llm_provider.models import (
+    ChatRequest,
+    Message,
+    ProviderConfig,
+    SystemPrompt,
+    ToolSchema,
+)
 from llm_provider.retry import RetryConfig
-
 
 _HAS_GEMINI_SDK = importlib.util.find_spec("google.genai") is not None
 
@@ -42,12 +45,16 @@ def _retry_cfg(attempts=1):
 
 # ─── Provider factory helpers (no live SDK calls) ────────────────────────────
 
+
 def _openai_provider(extra_settings=None):
     with patch.dict(sys.modules, {"openai": MagicMock()}):
         from llm_provider.providers.openai_provider import OpenAIProvider
+
         p = OpenAIProvider.__new__(OpenAIProvider)
     p._config = ProviderConfig(
-        host="https://api.openai.com/v1", default_model="gpt-4o", api_key="test-key",
+        host="https://api.openai.com/v1",
+        default_model="gpt-4o",
+        api_key="test-key",
         extra_settings=extra_settings or {},
     )
     p._client = MagicMock()
@@ -58,9 +65,12 @@ def _openai_provider(extra_settings=None):
 def _anthropic_provider():
     with patch.dict(sys.modules, {"anthropic": MagicMock()}):
         from llm_provider.providers.anthropic_provider import AnthropicProvider
+
         p = AnthropicProvider.__new__(AnthropicProvider)
     p._config = ProviderConfig(
-        host="https://api.anthropic.com", default_model="claude-3-5-sonnet", api_key="test-key",
+        host="https://api.anthropic.com",
+        default_model="claude-3-5-sonnet",
+        api_key="test-key",
     )
     p._client = MagicMock()
     p._max_tokens = 8192
@@ -71,9 +81,12 @@ def _anthropic_provider():
 def _ollama_provider(extra_settings=None):
     with patch.dict(sys.modules, {"requests": MagicMock(), "httpx": MagicMock()}):
         from llm_provider.providers.ollama_provider import OllamaProvider
+
         p = OllamaProvider.__new__(OllamaProvider)
     p._config = ProviderConfig(
-        host="http://localhost:11434", default_model="llama3", api_key="",
+        host="http://localhost:11434",
+        default_model="llama3",
+        api_key="",
         extra_settings=extra_settings or {},
     )
     p._base_url = "http://localhost:11434/api"
@@ -83,6 +96,7 @@ def _ollama_provider(extra_settings=None):
 
 
 # ─── ChatRequest validation ──────────────────────────────────────────────────
+
 
 class TestResponseSchemaValidation(unittest.TestCase):
     def test_non_dict_rejected(self):
@@ -105,6 +119,7 @@ class TestResponseSchemaValidation(unittest.TestCase):
 
 # ─── OpenAI ──────────────────────────────────────────────────────────────────
 
+
 class TestOpenAIResponseSchema(unittest.TestCase):
     def test_json_schema_response_format(self):
         provider = _openai_provider()
@@ -125,7 +140,9 @@ class TestOpenAIResponseSchema(unittest.TestCase):
         # json_object only forces valid JSON, not the shape, so the schema must
         # be described in the prompt (mlx-lm also ignores json_schema entirely).
         provider = _openai_provider(extra_settings={"structured_output_format": "json_object"})
-        req = ChatRequest(messages=[Message(role="user", content="Extract")], response_schema=_SCHEMA)
+        req = ChatRequest(
+            messages=[Message(role="user", content="Extract")], response_schema=_SCHEMA
+        )
         kwargs = provider._build_kwargs(req)
         last = kwargs["messages"][-1]["content"]
         self.assertIn("JSON Schema", last)
@@ -133,7 +150,9 @@ class TestOpenAIResponseSchema(unittest.TestCase):
 
     def test_json_schema_mode_does_not_inject_prompt(self):
         provider = _openai_provider()  # default json_schema (real enforcement)
-        req = ChatRequest(messages=[Message(role="user", content="Extract")], response_schema=_SCHEMA)
+        req = ChatRequest(
+            messages=[Message(role="user", content="Extract")], response_schema=_SCHEMA
+        )
         kwargs = provider._build_kwargs(req)
         self.assertEqual(kwargs["messages"][-1]["content"], "Extract")
 
@@ -159,6 +178,7 @@ class TestOpenAIResponseSchema(unittest.TestCase):
 
 # ─── Ollama ────────────────────────────────────────────────────────────────
 
+
 class TestOllamaResponseSchema(unittest.TestCase):
     def test_format_field_set(self):
         provider = _ollama_provider()
@@ -168,8 +188,11 @@ class TestOllamaResponseSchema(unittest.TestCase):
 
     def test_control_keys_not_leaked_into_payload(self):
         provider = _ollama_provider(
-            extra_settings={"disable_thinking": True, "structured_output_format": "json_object",
-                            "keep_alive": "10m"}
+            extra_settings={
+                "disable_thinking": True,
+                "structured_output_format": "json_object",
+                "keep_alive": "10m",
+            }
         )
         req = ChatRequest(messages=[Message(role="user", content="hi")])
         payload = provider._build_payload(req)
@@ -186,6 +209,7 @@ class TestOllamaResponseSchema(unittest.TestCase):
 
 
 # ─── Anthropic (forced synthetic tool) ───────────────────────────────────────
+
 
 class TestAnthropicResponseSchema(unittest.TestCase):
     def test_forces_synthetic_tool(self):
@@ -223,14 +247,17 @@ class TestAnthropicResponseSchema(unittest.TestCase):
 
 # ─── Gemini ──────────────────────────────────────────────────────────────────
 
+
 @unittest.skipUnless(_HAS_GEMINI_SDK, "google-genai SDK not installed")
 class TestGeminiResponseSchema(unittest.TestCase):
     def _provider(self):
         from llm_provider.providers.gemini_provider import GeminiProvider
+
         p = GeminiProvider.__new__(GeminiProvider)
         p._config = ProviderConfig(
             host="https://generativelanguage.googleapis.com",
-            default_model="gemini-1.5-flash", api_key="test-key",
+            default_model="gemini-1.5-flash",
+            api_key="test-key",
         )
         p._client = MagicMock()
         p._rate_limit_rpm = 0
@@ -244,7 +271,10 @@ class TestGeminiResponseSchema(unittest.TestCase):
         req = ChatRequest(messages=[Message(role="user", content="hi")], response_schema=_SCHEMA)
         captured = {}
         from google.genai import types
-        with patch.object(types, "GenerateContentConfig", side_effect=lambda **kw: captured.update(kw)):
+
+        with patch.object(
+            types, "GenerateContentConfig", side_effect=lambda **kw: captured.update(kw)
+        ):
             provider._build_kwargs(req)
         self.assertEqual(captured["response_mime_type"], "application/json")
         # additionalProperties-free schema survives the gemini sanitizer
@@ -263,12 +293,15 @@ class TestGeminiResponseSchema(unittest.TestCase):
 
 # ─── /no_think prefix ─────────────────────────────────────────────────────────
 
+
 class TestNoThinkPrefix(unittest.TestCase):
     def test_applied_for_qwen3_when_enabled(self):
         p = _openai_provider(extra_settings={"disable_thinking": True})
         p._config.default_model = "mlx-community/Qwen3.5-9B-MLX-4bit"
-        req = ChatRequest(messages=[Message(role="user", content="hi")],
-                          system_prompt=SystemPrompt(content="Be terse."))
+        req = ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            system_prompt=SystemPrompt(content="Be terse."),
+        )
         kwargs = p._build_kwargs(req)
         self.assertEqual(kwargs["messages"][0]["role"], "system")
         self.assertTrue(kwargs["messages"][0]["content"].startswith("/no_think\n"))
@@ -283,21 +316,26 @@ class TestNoThinkPrefix(unittest.TestCase):
     def test_noop_for_non_qwen3(self):
         p = _openai_provider(extra_settings={"disable_thinking": True})
         p._config.default_model = "gpt-4o"
-        req = ChatRequest(messages=[Message(role="user", content="hi")],
-                          system_prompt=SystemPrompt(content="Be terse."))
+        req = ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            system_prompt=SystemPrompt(content="Be terse."),
+        )
         kwargs = p._build_kwargs(req)
         self.assertEqual(kwargs["messages"][0]["content"], "Be terse.")
 
     def test_noop_when_disabled(self):
         p = _ollama_provider()  # disable_thinking not set
         p._config.default_model = "qwen3:8b"
-        req = ChatRequest(messages=[Message(role="user", content="hi")],
-                          system_prompt=SystemPrompt(content="Hello."))
+        req = ChatRequest(
+            messages=[Message(role="user", content="hi")],
+            system_prompt=SystemPrompt(content="Hello."),
+        )
         payload = p._build_payload(req)
         self.assertEqual(payload["messages"][0]["content"], "Hello.")
 
 
 # ─── Concurrency semaphore + mlx provider ────────────────────────────────────
+
 
 class TestConcurrencyAndMlx(unittest.IsolatedAsyncioTestCase):
     def test_provider_config_carries_max_concurrent(self):
@@ -310,16 +348,22 @@ class TestConcurrencyAndMlx(unittest.IsolatedAsyncioTestCase):
         class _Dummy(BaseProvider):
             def chat(self, request):  # pragma: no cover - not used
                 raise NotImplementedError
+
             async def achat(self, request):
                 async def _op():
                     return await self._track()
+
                 return await self._arun_with_limit(_op, "achat")
+
             def list_models(self):  # pragma: no cover
                 return []
+
             def name(self):  # pragma: no cover
                 return "dummy"
+
             def is_available(self):  # pragma: no cover
                 return True
+
             def supported_features(self):  # pragma: no cover
                 return None
 
@@ -339,6 +383,7 @@ class TestConcurrencyAndMlx(unittest.IsolatedAsyncioTestCase):
 
     def test_create_mlx_provider_defaults(self):
         from llm_provider.providers import create_mlx_provider
+
         with patch.dict(sys.modules, {"openai": MagicMock()}):
             provider = create_mlx_provider({"default_model": "mlx-community/Qwen3.5-9B"})
         es = provider._config.extra_settings

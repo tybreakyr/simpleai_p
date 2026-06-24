@@ -19,9 +19,11 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from llm_provider.models import (
-    ChatRequest, Message, SystemPrompt, ToolSchema, ProviderConfig,
+    ChatRequest,
+    Message,
+    ProviderConfig,
+    ToolSchema,
 )
-
 
 _HAS_OPENAI_SDK = importlib.util.find_spec("openai") is not None
 _HAS_ANTHROPIC_SDK = importlib.util.find_spec("anthropic") is not None
@@ -194,8 +196,8 @@ class TestOllamaExtraBodyAndRequired(unittest.TestCase):
         self.assertEqual(response.tool_calls[0].name, "echo")
 
     def test_required_emulation_raises_when_still_no_tool_call(self):
-        from llm_provider.models import ChatResponse
         from llm_provider.errors import InvalidResponseError
+        from llm_provider.models import ChatResponse
 
         provider = _ollama_provider()
         req = ChatRequest(
@@ -235,8 +237,8 @@ class TestOllamaRequiredEmulationAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.tool_calls[0].name, "echo")
 
     async def test_required_emulation_raises_when_still_no_tool_call_async(self):
-        from llm_provider.models import ChatResponse
         from llm_provider.errors import InvalidResponseError
+        from llm_provider.models import ChatResponse
 
         provider = _ollama_provider()
         req = ChatRequest(
@@ -262,6 +264,7 @@ class TestAnthropicExtraBody(unittest.TestCase):
     def test_own_bucket_merged(self):
         with patch("anthropic.Anthropic", MagicMock()):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             cfg = ProviderConfig(
                 host="https://api.anthropic.com",
                 default_model="claude-sonnet-4-6",
@@ -280,6 +283,7 @@ class TestAnthropicExtraBody(unittest.TestCase):
     def test_other_provider_bucket_not_leaked(self):
         with patch("anthropic.Anthropic", MagicMock()):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             cfg = ProviderConfig(
                 host="https://api.anthropic.com",
                 default_model="claude-sonnet-4-6",

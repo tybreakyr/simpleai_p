@@ -44,6 +44,7 @@ def _tool_exchange_messages():
 # Model-level validation
 # ---------------------------------------------------------------------------
 
+
 class TestMessageToolFields(unittest.TestCase):
     def test_tool_result_requires_call_id(self):
         with self.assertRaises(ValueError):
@@ -59,14 +60,19 @@ class TestMessageToolFields(unittest.TestCase):
 # OpenAI
 # ---------------------------------------------------------------------------
 
+
 class TestOpenAIToolMessages(unittest.TestCase):
     def _provider(self):
         config = ProviderConfig(
-            host="https://api.openai.com", default_model="gpt-4o",
-            api_key="k", timeout=30.0, retry_attempts=1,
+            host="https://api.openai.com",
+            default_model="gpt-4o",
+            api_key="k",
+            timeout=30.0,
+            retry_attempts=1,
         )
         with patch.dict(sys.modules, {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import OpenAIProvider
+
             p = OpenAIProvider.__new__(OpenAIProvider)
             p._config = config
             return p
@@ -98,13 +104,18 @@ class TestOpenAIToolMessages(unittest.TestCase):
 # Ollama
 # ---------------------------------------------------------------------------
 
+
 class TestOllamaToolMessages(unittest.TestCase):
     def _provider(self):
         config = ProviderConfig(
-            host="http://localhost:11434", default_model="llama3.1",
-            api_key=None, timeout=30.0, retry_attempts=1,
+            host="http://localhost:11434",
+            default_model="llama3.1",
+            api_key=None,
+            timeout=30.0,
+            retry_attempts=1,
         )
         from llm_provider.providers.ollama_provider import OllamaProvider
+
         p = OllamaProvider.__new__(OllamaProvider)
         p._config = config
         return p
@@ -127,14 +138,19 @@ class TestOllamaToolMessages(unittest.TestCase):
 # Anthropic
 # ---------------------------------------------------------------------------
 
+
 class TestAnthropicToolMessages(unittest.TestCase):
     def _provider(self):
         config = ProviderConfig(
-            host="https://api.anthropic.com", default_model="claude-sonnet-4-6",
-            api_key="k", timeout=30.0, retry_attempts=1,
+            host="https://api.anthropic.com",
+            default_model="claude-sonnet-4-6",
+            api_key="k",
+            timeout=30.0,
+            retry_attempts=1,
         )
         with patch.dict(sys.modules, {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             p = AnthropicProvider.__new__(AnthropicProvider)
             p._config = config
             p._max_tokens = 1024
@@ -147,28 +163,40 @@ class TestAnthropicToolMessages(unittest.TestCase):
         asst = msgs[1]
         self.assertEqual(asst["role"], "assistant")
         # Empty content → no text block, only tool_use.
-        self.assertEqual(asst["content"], [
-            {"type": "tool_use", "id": "call_1", "name": "get_thing", "input": {"x": 1}},
-        ])
-        # tool result rides in a user turn as a tool_result block.
-        self.assertEqual(msgs[2], {
-            "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": "call_1", "content": "the result"},
+        self.assertEqual(
+            asst["content"],
+            [
+                {"type": "tool_use", "id": "call_1", "name": "get_thing", "input": {"x": 1}},
             ],
-        })
+        )
+        # tool result rides in a user turn as a tool_result block.
+        self.assertEqual(
+            msgs[2],
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": "the result"},
+                ],
+            },
+        )
 
     def test_merges_consecutive_tool_results(self):
         p = self._provider()
-        req = ChatRequest(messages=[
-            Message(role="user", content="go"),
-            Message(role="assistant", content="", tool_calls=[
-                ToolCall(id="a", name="t", arguments={}),
-                ToolCall(id="b", name="t", arguments={}),
-            ]),
-            _tool_result(call_id="a", content="ra"),
-            _tool_result(call_id="b", content="rb"),
-        ])
+        req = ChatRequest(
+            messages=[
+                Message(role="user", content="go"),
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(id="a", name="t", arguments={}),
+                        ToolCall(id="b", name="t", arguments={}),
+                    ],
+                ),
+                _tool_result(call_id="a", content="ra"),
+                _tool_result(call_id="b", content="rb"),
+            ]
+        )
         msgs = p._build_kwargs(req)["messages"]
         # Two tool results collapse into a single user turn with two blocks.
         self.assertEqual(len(msgs), 3)
@@ -181,21 +209,28 @@ class TestAnthropicToolMessages(unittest.TestCase):
 # Gemini
 # ---------------------------------------------------------------------------
 
+
 class TestGeminiToolMessages(unittest.TestCase):
     def _provider_and_types(self):
         config = ProviderConfig(
             host="https://generativelanguage.googleapis.com",
-            default_model="gemini-1.5-flash", api_key="k",
-            timeout=30.0, retry_attempts=1,
+            default_model="gemini-1.5-flash",
+            api_key="k",
+            timeout=30.0,
+            retry_attempts=1,
         )
         mock_genai = MagicMock()
-        ctx = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": mock_genai,
-            "google.genai.types": mock_genai.types,
-        })
+        ctx = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": mock_genai,
+                "google.genai.types": mock_genai.types,
+            },
+        )
         ctx.start()
         from llm_provider.providers.gemini_provider import GeminiProvider
+
         p = GeminiProvider.__new__(GeminiProvider)
         p._config = config
         return p, mock_genai.types, ctx
@@ -217,12 +252,18 @@ class TestGeminiToolMessages(unittest.TestCase):
     def test_replays_thought_signature_on_function_call(self):
         p, types, ctx = self._provider_and_types()
         try:
-            req = ChatRequest(messages=[
-                Message(role="user", content="go"),
-                Message(role="assistant", content="", tool_calls=[
-                    ToolCall(id="a", name="t", arguments={}, thought_signature=b"sig"),
-                ]),
-            ])
+            req = ChatRequest(
+                messages=[
+                    Message(role="user", content="go"),
+                    Message(
+                        role="assistant",
+                        content="",
+                        tool_calls=[
+                            ToolCall(id="a", name="t", arguments={}, thought_signature=b"sig"),
+                        ],
+                    ),
+                ]
+            )
             p._build_kwargs(req)
             # The functionCall part must carry the original thought_signature.
             kwargs = [c.kwargs for c in types.Part.call_args_list]
@@ -232,13 +273,16 @@ class TestGeminiToolMessages(unittest.TestCase):
 
     def test_parse_captures_thought_signature(self):
         import types as _t
+
         p, _types, ctx = self._provider_and_types()
         try:
             fc = _t.SimpleNamespace(id=None, name="get_thing", args={"x": 1})
             part = _t.SimpleNamespace(function_call=fc, thought_signature=b"sig")
             content = _t.SimpleNamespace(parts=[part])
             response = _t.SimpleNamespace(
-                text="", candidates=[_t.SimpleNamespace(content=content)], function_calls=None,
+                text="",
+                candidates=[_t.SimpleNamespace(content=content)],
+                function_calls=None,
             )
             req = ChatRequest(messages=[Message(role="user", content="hi")])
             parsed = p._parse_response(response, req)

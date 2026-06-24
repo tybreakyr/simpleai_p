@@ -1,11 +1,10 @@
-import asyncio
 import json
 import sys
 import threading
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from llm_provider.models import ChatRequest, Message, ToolSchema, ToolCall, ProviderConfig
+from llm_provider.models import ChatRequest, Message, ProviderConfig, ToolSchema
 from llm_provider.retry import RetryConfig
 
 
@@ -15,9 +14,11 @@ def _retry_cfg(attempts=1):
 
 # ─── Provider factory helpers ────────────────────────────────────────────────
 
+
 def _anthropic_provider(async_client=None):
     with patch.dict(sys.modules, {"anthropic": MagicMock()}):
         from llm_provider.providers.anthropic_provider import AnthropicProvider
+
         p = AnthropicProvider.__new__(AnthropicProvider)
     p._config = ProviderConfig(
         host="https://api.anthropic.com", default_model="claude-3-5-sonnet", api_key="test-key"
@@ -33,6 +34,7 @@ def _anthropic_provider(async_client=None):
 def _openai_provider(async_client=None):
     with patch.dict(sys.modules, {"openai": MagicMock()}):
         from llm_provider.providers.openai_provider import OpenAIProvider
+
         p = OpenAIProvider.__new__(OpenAIProvider)
     p._config = ProviderConfig(
         host="https://api.openai.com/v1", default_model="gpt-4o", api_key="test-key"
@@ -46,12 +48,16 @@ def _openai_provider(async_client=None):
 
 def _gemini_provider():
     mock_genai = MagicMock()
-    with patch.dict(sys.modules, {
-        "google": MagicMock(),
-        "google.genai": mock_genai,
-        "google.genai.types": mock_genai.types,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "google": MagicMock(),
+            "google.genai": mock_genai,
+            "google.genai.types": mock_genai.types,
+        },
+    ):
         from llm_provider.providers.gemini_provider import GeminiProvider
+
         p = GeminiProvider.__new__(GeminiProvider)
     p._config = ProviderConfig(
         host="https://generativelanguage.googleapis.com",
@@ -69,10 +75,9 @@ def _gemini_provider():
 def _ollama_provider(async_client=None):
     with patch.dict(sys.modules, {"requests": MagicMock(), "httpx": MagicMock()}):
         from llm_provider.providers.ollama_provider import OllamaProvider
+
         p = OllamaProvider.__new__(OllamaProvider)
-    p._config = ProviderConfig(
-        host="http://localhost:11434", default_model="llama3", api_key=""
-    )
+    p._config = ProviderConfig(host="http://localhost:11434", default_model="llama3", api_key="")
     p._base_url = "http://localhost:11434/api"
     p._session = MagicMock()
     p._retry_config = _retry_cfg()
@@ -82,6 +87,7 @@ def _ollama_provider(async_client=None):
 
 
 # ─── Anthropic sync ──────────────────────────────────────────────────────────
+
 
 class TestAnthropicToolCalling(unittest.TestCase):
     def setUp(self):
@@ -106,14 +112,17 @@ class TestAnthropicToolCalling(unittest.TestCase):
 
     def test_chat_with_tools_passes_schema_to_sdk(self):
         self.provider._client.messages.create.return_value = self._text_response()
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tools=tools))
 
         kwargs = self.provider._client.messages.create.call_args.kwargs
         self.assertIn("tools", kwargs)
-        self.assertEqual(kwargs["tools"], [
-            {"name": "weather", "description": "get weather", "input_schema": {"type": "object"}}
-        ])
+        self.assertEqual(
+            kwargs["tools"],
+            [{"name": "weather", "description": "get weather", "input_schema": {"type": "object"}}],
+        )
 
     def test_response_parses_tool_calls(self):
         self.provider._client.messages.create.return_value = self._tool_response(
@@ -143,19 +152,20 @@ class TestAnthropicToolCalling(unittest.TestCase):
 
     def test_tool_choice_forwarded(self):
         self.provider._client.messages.create.return_value = self._text_response()
-        self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="any"))
+        self.provider.chat(
+            ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="any")
+        )
         kwargs = self.provider._client.messages.create.call_args.kwargs
         self.assertEqual(kwargs["tool_choice"], {"type": "any"})
 
     def test_stop_reason_populated_for_tool_use(self):
-        self.provider._client.messages.create.return_value = self._tool_response(
-            ("id1", "fn", {})
-        )
+        self.provider._client.messages.create.return_value = self._tool_response(("id1", "fn", {}))
         resp = self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")]))
         self.assertEqual(resp.stop_reason, "tool_use")
 
 
 # ─── Anthropic async ─────────────────────────────────────────────────────────
+
 
 class TestAnthropicToolCallingAsync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -174,7 +184,9 @@ class TestAnthropicToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         self.async_client.messages.create = AsyncMock(
             return_value=self._tool_response("call_abc", "weather", {"loc": "SF"})
         )
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         resp = await self.provider.achat(
             ChatRequest(messages=[Message(role="user", content="hi")], tools=tools)
         )
@@ -189,7 +201,9 @@ class TestAnthropicToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         r.content = [MagicMock(type="text", text="ok")]
         r.stop_reason = "end_turn"
         self.async_client.messages.create = AsyncMock(return_value=r)
-        tools = [ToolSchema(name="search", description="web search", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="search", description="web search", input_schema={"type": "object"})
+        ]
         await self.provider.achat(
             ChatRequest(messages=[Message(role="user", content="hi")], tools=tools)
         )
@@ -199,6 +213,7 @@ class TestAnthropicToolCallingAsync(unittest.IsolatedAsyncioTestCase):
 
 
 # ─── OpenAI sync ─────────────────────────────────────────────────────────────
+
 
 class TestOpenAIToolCalling(unittest.TestCase):
     def setUp(self):
@@ -230,14 +245,25 @@ class TestOpenAIToolCalling(unittest.TestCase):
 
     def test_chat_with_tools_passes_schema_to_sdk(self):
         self.provider._client.chat.completions.create.return_value = self._text_completion()
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tools=tools))
         kwargs = self.provider._client.chat.completions.create.call_args.kwargs
         self.assertIn("tools", kwargs)
-        self.assertEqual(kwargs["tools"], [{
-            "type": "function",
-            "function": {"name": "weather", "description": "get weather", "parameters": {"type": "object"}}
-        }])
+        self.assertEqual(
+            kwargs["tools"],
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "weather",
+                        "description": "get weather",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        )
 
     def test_response_parses_tool_calls(self):
         self.provider._client.chat.completions.create.return_value = self._tool_completion(
@@ -252,24 +278,33 @@ class TestOpenAIToolCalling(unittest.TestCase):
 
     def test_tool_choice_forwarded(self):
         self.provider._client.chat.completions.create.return_value = self._text_completion()
-        self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="weather"))
+        self.provider.chat(
+            ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="weather")
+        )
         kwargs = self.provider._client.chat.completions.create.call_args.kwargs
-        self.assertEqual(kwargs["tool_choice"], {"type": "function", "function": {"name": "weather"}})
+        self.assertEqual(
+            kwargs["tool_choice"], {"type": "function", "function": {"name": "weather"}}
+        )
 
     def test_tool_choice_auto(self):
         self.provider._client.chat.completions.create.return_value = self._text_completion()
-        self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="auto"))
+        self.provider.chat(
+            ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="auto")
+        )
         kwargs = self.provider._client.chat.completions.create.call_args.kwargs
         self.assertEqual(kwargs["tool_choice"], "auto")
 
     def test_tool_choice_any_maps_to_required(self):
         self.provider._client.chat.completions.create.return_value = self._text_completion()
-        self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="any"))
+        self.provider.chat(
+            ChatRequest(messages=[Message(role="user", content="hi")], tool_choice="any")
+        )
         kwargs = self.provider._client.chat.completions.create.call_args.kwargs
         self.assertEqual(kwargs["tool_choice"], "required")
 
 
 # ─── OpenAI async ────────────────────────────────────────────────────────────
+
 
 class TestOpenAIToolCallingAsync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -289,7 +324,9 @@ class TestOpenAIToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         r.choices = [choice]
         self.async_client.chat.completions.create = AsyncMock(return_value=r)
 
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         resp = await self.provider.achat(
             ChatRequest(messages=[Message(role="user", content="hi")], tools=tools)
         )
@@ -315,14 +352,18 @@ class TestOpenAIToolCallingAsync(unittest.IsolatedAsyncioTestCase):
 
 # ─── Gemini sync ─────────────────────────────────────────────────────────────
 
+
 class TestGeminiToolCalling(unittest.TestCase):
     def setUp(self):
         mock_genai = MagicMock()
-        self.patcher = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": mock_genai,
-            "google.genai.types": mock_genai.types,
-        })
+        self.patcher = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": mock_genai,
+                "google.genai.types": mock_genai.types,
+            },
+        )
         self.patcher.start()
         self.provider = _gemini_provider()
 
@@ -333,7 +374,9 @@ class TestGeminiToolCalling(unittest.TestCase):
         self.provider._client.models.generate_content.return_value = MagicMock(
             text="hello", function_calls=[]
         )
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tools=tools))
         self.provider._client.models.generate_content.assert_called_once()
 
@@ -370,14 +413,18 @@ class TestGeminiToolCalling(unittest.TestCase):
 
 # ─── Gemini async ────────────────────────────────────────────────────────────
 
+
 class TestGeminiToolCallingAsync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         mock_genai = MagicMock()
-        self.patcher = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": mock_genai,
-            "google.genai.types": mock_genai.types,
-        })
+        self.patcher = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": mock_genai,
+                "google.genai.types": mock_genai.types,
+            },
+        )
         self.patcher.start()
         self.provider = _gemini_provider()
 
@@ -392,7 +439,9 @@ class TestGeminiToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         self.provider._client.aio.models.generate_content = AsyncMock(
             return_value=MagicMock(text="On it.", function_calls=[fc])
         )
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         resp = await self.provider.achat(
             ChatRequest(messages=[Message(role="user", content="hi")], tools=tools)
         )
@@ -420,6 +469,7 @@ class TestGeminiToolCallingAsync(unittest.IsolatedAsyncioTestCase):
 
 # ─── Ollama sync ─────────────────────────────────────────────────────────────
 
+
 class TestOllamaToolCalling(unittest.TestCase):
     def setUp(self):
         self.provider = _ollama_provider()
@@ -428,23 +478,40 @@ class TestOllamaToolCalling(unittest.TestCase):
         self.provider._session.post.return_value = MagicMock(
             json=MagicMock(return_value={"message": {"content": "hello"}})
         )
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")], tools=tools))
         kwargs = self.provider._session.post.call_args.kwargs
         payload = kwargs["json"]
         self.assertIn("tools", payload)
-        self.assertEqual(payload["tools"], [{
-            "type": "function",
-            "function": {"name": "weather", "description": "get weather", "parameters": {"type": "object"}}
-        }])
+        self.assertEqual(
+            payload["tools"],
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "weather",
+                        "description": "get weather",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        )
 
     def test_response_parses_tool_calls(self):
-        self.provider._session.post.return_value = MagicMock(json=MagicMock(return_value={
-            "message": {
-                "content": "Checking.",
-                "tool_calls": [{"function": {"name": "weather", "arguments": {"loc": "NY"}}}],
-            }
-        }))
+        self.provider._session.post.return_value = MagicMock(
+            json=MagicMock(
+                return_value={
+                    "message": {
+                        "content": "Checking.",
+                        "tool_calls": [
+                            {"function": {"name": "weather", "arguments": {"loc": "NY"}}}
+                        ],
+                    }
+                }
+            )
+        )
         resp = self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")]))
         self.assertIsNotNone(resp.tool_calls)
         self.assertEqual(resp.tool_calls[0].name, "weather")
@@ -455,30 +522,39 @@ class TestOllamaToolCalling(unittest.TestCase):
         self.provider._session.post.return_value = MagicMock(
             json=MagicMock(return_value={"message": {"content": "ok"}})
         )
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
-        self.provider.chat(ChatRequest(
-            messages=[Message(role="user", content="hi")], tools=tools, tool_choice="auto"
-        ))
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
+        self.provider.chat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")], tools=tools, tool_choice="auto"
+            )
+        )
         payload = self.provider._session.post.call_args.kwargs["json"]
         self.assertIn("tool_choice", payload)
         self.assertEqual(payload["tool_choice"], "auto")
 
     def test_multiple_tool_calls_get_unique_ids(self):
-        self.provider._session.post.return_value = MagicMock(json=MagicMock(return_value={
-            "message": {
-                "content": "",
-                "tool_calls": [
-                    {"function": {"name": "weather", "arguments": {"loc": "NY"}}},
-                    {"function": {"name": "weather", "arguments": {"loc": "LA"}}},
-                ],
-            }
-        }))
+        self.provider._session.post.return_value = MagicMock(
+            json=MagicMock(
+                return_value={
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "weather", "arguments": {"loc": "NY"}}},
+                            {"function": {"name": "weather", "arguments": {"loc": "LA"}}},
+                        ],
+                    }
+                }
+            )
+        )
         resp = self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")]))
         ids = [tc.id for tc in resp.tool_calls]
         self.assertEqual(len(set(ids)), 2, "Multiple tool calls must have unique IDs")
 
 
 # ─── Ollama async ────────────────────────────────────────────────────────────
+
 
 class TestOllamaToolCallingAsync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -500,7 +576,9 @@ class TestOllamaToolCallingAsync(unittest.IsolatedAsyncioTestCase):
             }
         }
         self.async_client.post = AsyncMock(return_value=mock_response)
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
         resp = await self.provider.achat(
             ChatRequest(messages=[Message(role="user", content="hi")], tools=tools)
         )
@@ -513,10 +591,14 @@ class TestOllamaToolCallingAsync(unittest.IsolatedAsyncioTestCase):
         mock_response = MagicMock()
         mock_response.json.return_value = {"message": {"content": "ok"}}
         self.async_client.post = AsyncMock(return_value=mock_response)
-        tools = [ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})]
-        await self.provider.achat(ChatRequest(
-            messages=[Message(role="user", content="hi")], tools=tools, tool_choice="auto"
-        ))
+        tools = [
+            ToolSchema(name="weather", description="get weather", input_schema={"type": "object"})
+        ]
+        await self.provider.achat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")], tools=tools, tool_choice="auto"
+            )
+        )
         payload = self.async_client.post.call_args.kwargs.get("json", {})
         self.assertIn("tool_choice", payload)
         self.assertEqual(payload["tool_choice"], "auto")
@@ -540,9 +622,11 @@ class TestOllamaToolCallingAsync(unittest.IsolatedAsyncioTestCase):
 
 # ─── Nested→flat tool-param adaptation (per-model capability) ─────────────────
 
+
 def _openai_provider_for_model(default_model, extra_settings=None):
     with patch.dict(sys.modules, {"openai": MagicMock()}):
         from llm_provider.providers.openai_provider import OpenAIProvider
+
         p = OpenAIProvider.__new__(OpenAIProvider)
     p._config = ProviderConfig(
         host="https://api.openai.com/v1",
@@ -564,7 +648,10 @@ def _nested_tool():
             "properties": {
                 "say": {
                     "type": "object",
-                    "properties": {"text": {"type": "string"}, "determination": {"type": "integer"}},
+                    "properties": {
+                        "text": {"type": "string"},
+                        "determination": {"type": "integer"},
+                    },
                     "required": ["text", "determination"],
                 },
             },
@@ -595,18 +682,22 @@ class TestNestedToolParamFlattening(unittest.TestCase):
             "submit", {"say__text": "hi", "say__determination": 80}
         )
 
-        resp = provider.chat(ChatRequest(
-            messages=[Message(role="user", content="hi")],
-            tools=[_nested_tool()],
-            tool_choice="submit",
-        ))
+        resp = provider.chat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")],
+                tools=[_nested_tool()],
+                tool_choice="submit",
+            )
+        )
 
         # Wire schema sent to the SDK is flattened (no nested object property).
         kwargs = provider._client.chat.completions.create.call_args.kwargs
         params = kwargs["tools"][0]["function"]["parameters"]
         self.assertEqual(set(params["properties"]), {"say__text", "say__determination"})
         # Forced-tool name is preserved.
-        self.assertEqual(kwargs["tool_choice"], {"type": "function", "function": {"name": "submit"}})
+        self.assertEqual(
+            kwargs["tool_choice"], {"type": "function", "function": {"name": "submit"}}
+        )
         # Returned args are re-nested for the caller.
         self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
 
@@ -615,10 +706,12 @@ class TestNestedToolParamFlattening(unittest.TestCase):
         provider._client.chat.completions.create.return_value = _openai_tool_completion(
             "submit", {"say": {"text": "hi", "determination": 80}}
         )
-        resp = provider.chat(ChatRequest(
-            messages=[Message(role="user", content="hi")],
-            tools=[_nested_tool()],
-        ))
+        resp = provider.chat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")],
+                tools=[_nested_tool()],
+            )
+        )
         kwargs = provider._client.chat.completions.create.call_args.kwargs
         params = kwargs["tools"][0]["function"]["parameters"]
         self.assertIn("say", params["properties"])
@@ -627,32 +720,40 @@ class TestNestedToolParamFlattening(unittest.TestCase):
         self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
 
     def test_extra_settings_override_forces_flatten_on_capable_model(self):
-        provider = _openai_provider_for_model("gpt-4o", extra_settings={"flatten_tool_params": True})
+        provider = _openai_provider_for_model(
+            "gpt-4o", extra_settings={"flatten_tool_params": True}
+        )
         provider._client.chat.completions.create.return_value = _openai_tool_completion(
             "submit", {"say__text": "hi", "say__determination": 80}
         )
-        resp = provider.chat(ChatRequest(
-            messages=[Message(role="user", content="hi")],
-            tools=[_nested_tool()],
-        ))
+        resp = provider.chat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")],
+                tools=[_nested_tool()],
+            )
+        )
         kwargs = provider._client.chat.completions.create.call_args.kwargs
         params = kwargs["tools"][0]["function"]["parameters"]
         self.assertEqual(set(params["properties"]), {"say__text", "say__determination"})
         self.assertEqual(resp.tool_calls[0].arguments, {"say": {"text": "hi", "determination": 80}})
 
     def test_override_can_disable_flatten_on_weak_model(self):
-        provider = _openai_provider_for_model("qwen3", extra_settings={"flatten_tool_params": False})
+        provider = _openai_provider_for_model(
+            "qwen3", extra_settings={"flatten_tool_params": False}
+        )
         provider._client.chat.completions.create.return_value = _openai_tool_completion(
             "submit", {"say": {"text": "hi", "determination": 80}}
         )
-        provider.chat(ChatRequest(
-            messages=[Message(role="user", content="hi")],
-            tools=[_nested_tool()],
-        ))
+        provider.chat(
+            ChatRequest(
+                messages=[Message(role="user", content="hi")],
+                tools=[_nested_tool()],
+            )
+        )
         kwargs = provider._client.chat.completions.create.call_args.kwargs
         params = kwargs["tools"][0]["function"]["parameters"]
         self.assertIn("say", params["properties"])  # left nested
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

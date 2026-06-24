@@ -13,7 +13,6 @@ is found to need accommodation — callers never have to know about it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -34,12 +33,12 @@ _FULLY_CAPABLE = ModelCapabilities()
 # Ordered (substring, capabilities) rules, matched case-insensitively against the
 # model name. First match wins. Seeded only with what we've actually observed:
 # Qwen3-family models raise on nested tool params under multi-call load.
-_REGISTRY: List[Tuple[str, ModelCapabilities]] = [
+_REGISTRY: list[tuple[str, ModelCapabilities]] = [
     ("qwen3", ModelCapabilities(supports_nested_tool_params=False)),
 ]
 
 
-def get_model_capabilities(model_name: Optional[str]) -> ModelCapabilities:
+def get_model_capabilities(model_name: str | None) -> ModelCapabilities:
     """Look up capabilities for ``model_name`` (first matching pattern wins).
 
     Unknown / empty names return the fully-capable defaults so the library never
@@ -54,6 +53,6 @@ def get_model_capabilities(model_name: Optional[str]) -> ModelCapabilities:
     return _FULLY_CAPABLE
 
 
-def supports_nested_tool_params(model_name: Optional[str]) -> bool:
+def supports_nested_tool_params(model_name: str | None) -> bool:
     """Convenience predicate for the nested-tool-params capability."""
     return get_model_capabilities(model_name).supports_nested_tool_params

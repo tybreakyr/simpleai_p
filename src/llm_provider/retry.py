@@ -2,22 +2,23 @@
 Retry mechanism with exponential backoff for LLM provider operations.
 """
 
-import time
 import asyncio
 import inspect
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TypeVar, Optional, Any
 from functools import wraps
+from typing import Any, TypeVar
 
-from .errors import LLMError, is_retryable, OperationFailedError
+from .errors import LLMError, OperationFailedError, is_retryable
 
-
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 @dataclass
 class RetryConfig:
     """Configuration for retry behavior."""
+
     max_retries: int = 3
     base_delay: float = 2.0
     max_delay: float = 30.0
@@ -40,45 +41,41 @@ class RetryConfig:
 def calculate_backoff_delay(attempt: int, config: RetryConfig) -> float:
     """
     Calculate exponential backoff delay for a given attempt.
-    
+
     Args:
         attempt: The attempt number (0-indexed)
         config: Retry configuration
-        
+
     Returns:
         Delay in seconds
     """
-    delay = config.base_delay * (config.backoff_factor ** attempt)
+    delay = config.base_delay * (config.backoff_factor**attempt)
     return min(delay, config.max_delay)
 
 
-def retry_with_backoff(
-    func: Callable[[], T],
-    config: RetryConfig,
-    operation_name: str = ""
-) -> T:
+def retry_with_backoff(func: Callable[[], T], config: RetryConfig, operation_name: str = "") -> T:
     """
     Execute a function with retry logic and exponential backoff.
-    
+
     Args:
         func: Function to execute (no arguments)
         config: Retry configuration
         operation_name: Name of the operation for error reporting
-        
+
     Returns:
         Result of the function
-        
+
     Raises:
         LLMError: If all retries fail or a non-retryable error occurs
     """
-    last_error: Optional[Exception] = None
-    
+    last_error: Exception | None = None
+
     for attempt in range(config.max_retries + 1):
         try:
             return func()
         except Exception as e:
             last_error = e
-            
+
             # Check if error is retryable
             if not is_retryable(e):
                 # Wrap non-LLM errors
@@ -87,11 +84,11 @@ def retry_with_backoff(
                         message=f"Operation failed: {str(e)}",
                         operation=operation_name,
                         retryable=False,
-                        cause=e
+                        cause=e,
                     ) from e
                 # Re-raise LLM errors that are not retryable
                 raise
-            
+
             # If this was the last attempt, raise the error
             if attempt >= config.max_retries:
                 # Update error with retry count
@@ -105,15 +102,15 @@ def retry_with_backoff(
                         operation=operation_name,
                         retryable=True,
                         retry_count=attempt + 1,
-                        cause=e
+                        cause=e,
                     ) from e
-            
+
             # Use API-suggested retry delay if provided (e.g. Gemini retryDelay),
             # otherwise fall back to exponential backoff.
             suggested = getattr(e, "retry_after", None)
             delay = suggested if suggested is not None else calculate_backoff_delay(attempt, config)
             time.sleep(delay)
-    
+
     # Should never reach here, but just in case
     if last_error:
         raise OperationFailedError(
@@ -121,32 +118,28 @@ def retry_with_backoff(
             operation=operation_name,
             retryable=True,
             retry_count=config.max_retries,
-            cause=last_error
+            cause=last_error,
         ) from last_error
-    
+
     raise OperationFailedError(
-        message="Operation failed with unknown error",
-        operation=operation_name,
-        retryable=True
+        message="Operation failed with unknown error", operation=operation_name, retryable=True
     )
 
 
 async def _async_retry_with_backoff(
-    func: Callable[[], Any],
-    config: RetryConfig,
-    operation_name: str = ""
+    func: Callable[[], Any], config: RetryConfig, operation_name: str = ""
 ) -> Any:
     """
     Execute an async function with retry logic and exponential backoff.
     """
-    last_error: Optional[Exception] = None
-    
+    last_error: Exception | None = None
+
     for attempt in range(config.max_retries + 1):
         try:
             return await func()
         except Exception as e:
             last_error = e
-            
+
             # Check if error is retryable
             if not is_retryable(e):
                 # Wrap non-LLM errors
@@ -155,11 +148,11 @@ async def _async_retry_with_backoff(
                         message=f"Operation failed: {str(e)}",
                         operation=operation_name,
                         retryable=False,
-                        cause=e
+                        cause=e,
                     ) from e
                 # Re-raise LLM errors that are not retryable
                 raise
-            
+
             # If this was the last attempt, raise the error
             if attempt >= config.max_retries:
                 # Update error with retry count
@@ -173,15 +166,15 @@ async def _async_retry_with_backoff(
                         operation=operation_name,
                         retryable=True,
                         retry_count=attempt + 1,
-                        cause=e
+                        cause=e,
                     ) from e
-            
+
             # Use API-suggested retry delay if provided (e.g. Gemini retryDelay),
             # otherwise fall back to exponential backoff.
             suggested = getattr(e, "retry_after", None)
             delay = suggested if suggested is not None else calculate_backoff_delay(attempt, config)
             await asyncio.sleep(delay)
-    
+
     # Should never reach here, but just in case
     if last_error:
         raise OperationFailedError(
@@ -189,53 +182,54 @@ async def _async_retry_with_backoff(
             operation=operation_name,
             retryable=True,
             retry_count=config.max_retries,
-            cause=last_error
+            cause=last_error,
         ) from last_error
-    
+
     raise OperationFailedError(
-        message="Operation failed with unknown error",
-        operation=operation_name,
-        retryable=True
+        message="Operation failed with unknown error", operation=operation_name, retryable=True
     )
 
 
-def retryable(operation_name: str = "", retry_config: Optional[RetryConfig] = None):
+def retryable(operation_name: str = "", retry_config: RetryConfig | None = None):
     """
     Decorator for automatically retrying functions with exponential backoff.
-    
+
     Args:
         operation_name: Name of the operation for error reporting
         retry_config: Retry configuration (uses default if not provided)
-    
+
     Usage:
         @retryable(operation_name="chat")
         def chat(self, request):
             ...
     """
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         if inspect.iscoroutinefunction(func):
+
             @wraps(func)
             async def async_wrapper(*args, **kwargs) -> Any:
                 config = retry_config or RetryConfig()
                 op_name = operation_name or func.__name__
-                
+
                 async def _call():
                     return await func(*args, **kwargs)
-                
+
                 return await _async_retry_with_backoff(_call, config, op_name)
-            
+
             return async_wrapper
         else:
+
             @wraps(func)
             def wrapper(*args, **kwargs) -> Any:
                 config = retry_config or RetryConfig()
                 op_name = operation_name or func.__name__
-                
+
                 def _call():
                     return func(*args, **kwargs)
-                
-                return retry_with_backoff(_call, config, op_name)
-            
-            return wrapper
-    return decorator
 
+                return retry_with_backoff(_call, config, op_name)
+
+            return wrapper
+
+    return decorator

@@ -5,11 +5,16 @@ Unit tests for the OpenAI provider implementation.
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
-from llm_provider.models import ProviderConfig, ChatRequest, Message, SystemPrompt
+
 from llm_provider.errors import (
-    RateLimitExceededError, TimeoutError, ConnectionFailedError,
-    ModelNotAvailableError, LLMError, InvalidResponseError,
+    ConnectionFailedError,
+    InvalidResponseError,
+    LLMError,
+    ModelNotAvailableError,
+    RateLimitExceededError,
+    TimeoutError,
 )
+from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
 from llm_provider.retry import RetryConfig
 
 
@@ -32,6 +37,7 @@ def _make_provider(config=None):
 
     with patch.dict(sys.modules, {"openai": MagicMock()}):
         from llm_provider.providers.openai_provider import OpenAIProvider
+
         provider = OpenAIProvider.__new__(OpenAIProvider)
         provider._config = config
         provider._client = MagicMock()
@@ -57,6 +63,7 @@ class TestOpenAIProviderInit(unittest.TestCase):
         config = _make_config(api_key=None)
         with patch.dict("sys.modules", {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import OpenAIProvider
+
             with self.assertRaises(ValueError):
                 OpenAIProvider(config)
 
@@ -172,6 +179,7 @@ class TestOpenAIProviderErrorClassification(unittest.TestCase):
 
     def test_rate_limit_error(self):
         import sys
+
         fake_openai = MagicMock()
         RateLimitErr = type("RateLimitError", (Exception,), {})
         fake_openai.RateLimitError = RateLimitErr
@@ -190,6 +198,7 @@ class TestOpenAIProviderErrorClassification(unittest.TestCase):
 
     def test_timeout_error(self):
         import sys
+
         fake_openai = MagicMock()
         fake_openai.RateLimitError = type("RateLimitError", (Exception,), {})
         TimeoutErr = type("APITimeoutError", (Exception,), {})
@@ -206,6 +215,7 @@ class TestOpenAIProviderErrorClassification(unittest.TestCase):
 
     def test_connection_error(self):
         import sys
+
         fake_openai = MagicMock()
         fake_openai.RateLimitError = type("RateLimitError", (Exception,), {})
         fake_openai.APITimeoutError = type("APITimeoutError", (Exception,), {})
@@ -222,6 +232,7 @@ class TestOpenAIProviderErrorClassification(unittest.TestCase):
 
     def test_not_found_error(self):
         import sys
+
         fake_openai = MagicMock()
         fake_openai.RateLimitError = type("RateLimitError", (Exception,), {})
         fake_openai.APITimeoutError = type("APITimeoutError", (Exception,), {})
@@ -238,6 +249,7 @@ class TestOpenAIProviderErrorClassification(unittest.TestCase):
 
     def test_auth_error(self):
         import sys
+
         fake_openai = MagicMock()
         fake_openai.RateLimitError = type("RateLimitError", (Exception,), {})
         fake_openai.APITimeoutError = type("APITimeoutError", (Exception,), {})
@@ -280,34 +292,47 @@ class TestOpenAIProviderListModels(unittest.TestCase):
 class TestCreateOpenAIProvider(unittest.TestCase):
     def test_factory_creates_provider(self):
         with patch.dict("sys.modules", {"openai": MagicMock()}):
-            from llm_provider.providers.openai_provider import create_openai_provider, OpenAIProvider
-            provider = create_openai_provider({
-                "api_key": "test-key",
-                "default_model": "gpt-4o",
-            })
+            from llm_provider.providers.openai_provider import (
+                OpenAIProvider,
+                create_openai_provider,
+            )
+
+            provider = create_openai_provider(
+                {
+                    "api_key": "test-key",
+                    "default_model": "gpt-4o",
+                }
+            )
         self.assertIsInstance(provider, OpenAIProvider)
         self.assertEqual(provider.name(), "openai")
 
     def test_factory_requires_api_key(self):
         with patch.dict("sys.modules", {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import create_openai_provider
+
             with self.assertRaises(ValueError):
                 create_openai_provider({"default_model": "gpt-4o"})
 
     def test_factory_defaults_model(self):
         with patch.dict("sys.modules", {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import create_openai_provider
+
             provider = create_openai_provider({"api_key": "test-key"})
         self.assertEqual(provider._config.default_model, "gpt-4o")
 
     def test_factory_respects_base_url(self):
         with patch.dict("sys.modules", {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import create_openai_provider
-            provider = create_openai_provider({
-                "api_key": "test-key",
-                "extra_settings": {"base_url": "https://my-proxy.example.com"},
-            })
-        self.assertEqual(provider._config.extra_settings["base_url"], "https://my-proxy.example.com")
+
+            provider = create_openai_provider(
+                {
+                    "api_key": "test-key",
+                    "extra_settings": {"base_url": "https://my-proxy.example.com"},
+                }
+            )
+        self.assertEqual(
+            provider._config.extra_settings["base_url"], "https://my-proxy.example.com"
+        )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import sys
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from llm_provider.models import ChatRequest, Message, ProviderConfig
 from llm_provider.retry import RetryConfig
@@ -15,11 +15,13 @@ def _retry_cfg(attempts=2):
 
 # ─── Anthropic ───────────────────────────────────────────────────────────────
 
+
 class TestAsyncAnthropic(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.async_client = MagicMock()
         with patch.dict(sys.modules, {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             p = AnthropicProvider.__new__(AnthropicProvider)
         p._config = ProviderConfig(
             host="https://api.anthropic.com",
@@ -47,11 +49,14 @@ class TestAsyncAnthropic(unittest.IsolatedAsyncioTestCase):
 
     async def test_achat_retries_on_transient_error(self):
         from llm_provider.errors import ConnectionFailedError
+
         ok = self._ok_response("Success")
         err = ConnectionFailedError("transient", "achat")
         self.async_client.messages.create = AsyncMock(side_effect=[err, err, ok])
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            resp = await self.provider.achat(ChatRequest(messages=[Message(role="user", content="hi")]))
+            resp = await self.provider.achat(
+                ChatRequest(messages=[Message(role="user", content="hi")])
+            )
         self.assertEqual(resp.message, "Success")
         self.assertEqual(self.async_client.messages.create.call_count, 3)
 
@@ -59,6 +64,7 @@ class TestAsyncAnthropic(unittest.IsolatedAsyncioTestCase):
         async def slow_create(*a, **kw):
             await asyncio.sleep(0.05)
             return self._ok_response("Done")
+
         self.async_client.messages.create = AsyncMock(side_effect=slow_create)
         req = ChatRequest(messages=[Message(role="user", content="hi")])
         start = time.monotonic()
@@ -75,11 +81,13 @@ class TestAsyncAnthropic(unittest.IsolatedAsyncioTestCase):
 
 # ─── OpenAI ──────────────────────────────────────────────────────────────────
 
+
 class TestAsyncOpenAI(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.async_client = MagicMock()
         with patch.dict(sys.modules, {"openai": MagicMock()}):
             from llm_provider.providers.openai_provider import OpenAIProvider
+
             p = OpenAIProvider.__new__(OpenAIProvider)
         p._config = ProviderConfig(
             host="https://api.openai.com/v1",
@@ -111,6 +119,7 @@ class TestAsyncOpenAI(unittest.IsolatedAsyncioTestCase):
         async def slow_create(*a, **kw):
             await asyncio.sleep(0.05)
             return self._ok_completion("Done")
+
         self.async_client.chat.completions.create = AsyncMock(side_effect=slow_create)
         req = ChatRequest(messages=[Message(role="user", content="hi")])
         start = time.monotonic()
@@ -126,16 +135,21 @@ class TestAsyncOpenAI(unittest.IsolatedAsyncioTestCase):
 
 # ─── Gemini ──────────────────────────────────────────────────────────────────
 
+
 class TestAsyncGemini(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.mock_genai = MagicMock()
-        self.patcher = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": self.mock_genai,
-            "google.genai.types": self.mock_genai.types,
-        })
+        self.patcher = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": self.mock_genai,
+                "google.genai.types": self.mock_genai.types,
+            },
+        )
         self.patcher.start()
         from llm_provider.providers.gemini_provider import GeminiProvider
+
         p = GeminiProvider.__new__(GeminiProvider)
         p._config = ProviderConfig(
             host="https://generativelanguage.googleapis.com",
@@ -165,6 +179,7 @@ class TestAsyncGemini(unittest.IsolatedAsyncioTestCase):
         async def slow_create(*a, **kw):
             await asyncio.sleep(0.05)
             return MagicMock(text="Done", function_calls=[])
+
         self.provider._client.aio.models.generate_content = AsyncMock(side_effect=slow_create)
         req = ChatRequest(messages=[Message(role="user", content="hi")])
         start = time.monotonic()
@@ -175,6 +190,7 @@ class TestAsyncGemini(unittest.IsolatedAsyncioTestCase):
 
 # ─── Ollama ──────────────────────────────────────────────────────────────────
 
+
 class TestAsyncOllama(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.async_client = MagicMock()
@@ -182,6 +198,7 @@ class TestAsyncOllama(unittest.IsolatedAsyncioTestCase):
         self.patcher = patch.dict(sys.modules, {"requests": MagicMock(), "httpx": self.mock_httpx})
         self.patcher.start()
         from llm_provider.providers.ollama_provider import OllamaProvider
+
         p = OllamaProvider.__new__(OllamaProvider)
         p._config = ProviderConfig(
             host="http://localhost:11434",
@@ -213,6 +230,7 @@ class TestAsyncOllama(unittest.IsolatedAsyncioTestCase):
         async def slow_post(*a, **kw):
             await asyncio.sleep(0.05)
             return self._ok_response("Done")
+
         self.async_client.post = AsyncMock(side_effect=slow_post)
         req = ChatRequest(messages=[Message(role="user", content="hi")])
         start = time.monotonic()
@@ -221,5 +239,5 @@ class TestAsyncOllama(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(resps), 5)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

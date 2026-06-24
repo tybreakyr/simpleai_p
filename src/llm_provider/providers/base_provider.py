@@ -4,67 +4,65 @@ Base provider helper class for common provider implementation patterns.
 
 import asyncio
 import dataclasses
-from typing import Dict, Any, List, Optional, Tuple, TypeVar, Generic, Callable, Type
+import json
 from abc import ABC
+from collections.abc import Callable
+from typing import Any, Generic, TypeVar
 
+from ..errors import (
+    ConnectionFailedError,
+    JSONParseFailedError,
+    LLMError,
+    TimeoutError,
+    classify_error,
+)
+from ..json_extractor import extract_json, parse_structured_output
+from ..model_capabilities import supports_nested_tool_params
 from ..models import ChatRequest, ChatResponse, ProviderConfig, ToolCall, ToolSchema
 from ..provider import Provider
 from ..retry import RetryConfig, retry_with_backoff
-from ..json_extractor import parse_structured_output, extract_json
-from ..model_capabilities import supports_nested_tool_params
-from ..schema_transform import flatten_tool_schema, renest_arguments, FlattenMapping
-from ..errors import (
-    LLMError, classify_error, ConnectionFailedError, TimeoutError,
-    JSONParseFailedError,
-)
-import json
+from ..schema_transform import FlattenMapping, flatten_tool_schema, renest_arguments
 
-
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class BaseProvider(Provider[T], ABC, Generic[T]):
     """
     Base class for provider implementations with common functionality.
-    
+
     Provides:
     - Retry logic integration
     - Error classification helpers
     - Structured output parsing integration
     - Configuration management
     """
-    
+
     def __init__(self, config: ProviderConfig):
         """
         Initialize base provider.
-        
+
         Args:
             config: Provider configuration
         """
         self._config = config
         self._retry_config = RetryConfig(
-            max_retries=config.retry_attempts,
-            base_delay=2.0,
-            max_delay=30.0,
-            backoff_factor=2.0
+            max_retries=config.retry_attempts, base_delay=2.0, max_delay=30.0, backoff_factor=2.0
         )
         mc = getattr(config, "max_concurrent", None)
         # asyncio.Semaphore (3.10+) binds to the running loop lazily, so it is
         # safe to construct here outside an event loop.
-        self._semaphore: Optional[asyncio.Semaphore] = (
-            asyncio.Semaphore(mc) if mc and mc > 0 else None
-        )
-    
+        self._semaphore: asyncio.Semaphore | None = asyncio.Semaphore(mc) if mc and mc > 0 else None
+
     @property
     def config(self) -> ProviderConfig:
         """Get provider configuration."""
         return self._config
-    
+
     @property
     def retry_config(self) -> RetryConfig:
         """Get retry configuration."""
         return self._retry_config
-    
+
     def _execute_with_retry(self, operation: Callable[[], Any], operation_name: str = "") -> Any:
         """
         Execute an operation with retry logic.
@@ -78,9 +76,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
         """
         return retry_with_backoff(operation, self._retry_config, operation_name)
 
-    async def _arun_with_limit(
-        self, operation: Callable[[], Any], operation_name: str = ""
-    ) -> Any:
+    async def _arun_with_limit(self, operation: Callable[[], Any], operation_name: str = "") -> Any:
         """Run an async operation under retry + the optional concurrency cap.
 
         Wraps ``_async_retry_with_backoff`` and, when ``max_concurrent`` is set,
@@ -92,15 +88,11 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
 
         semaphore = getattr(self, "_semaphore", None)
         if semaphore is None:
-            return await _async_retry_with_backoff(
-                operation, self._retry_config, operation_name
-            )
+            return await _async_retry_with_backoff(operation, self._retry_config, operation_name)
         async with semaphore:
-            return await _async_retry_with_backoff(
-                operation, self._retry_config, operation_name
-            )
+            return await _async_retry_with_backoff(operation, self._retry_config, operation_name)
 
-    def _maybe_no_think(self, system_content: Optional[str]) -> Optional[str]:
+    def _maybe_no_think(self, system_content: str | None) -> str | None:
         """Prepend ``/no_think`` for Qwen3 models when disable_thinking is set.
 
         ``/no_think`` is a Qwen3-specific soft switch that suppresses the
@@ -121,7 +113,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
     # never share state. See ``schema_transform`` / ``model_capabilities``.
     # ------------------------------------------------------------------
 
-    def _should_flatten_tool_params(self, model_name: Optional[str]) -> bool:
+    def _should_flatten_tool_params(self, model_name: str | None) -> bool:
         """Whether to flatten nested tool params for this model.
 
         An explicit ``extra_settings["flatten_tool_params"]`` (bool) overrides the
@@ -135,7 +127,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
 
     def _maybe_flatten_tools(
         self, request: ChatRequest[T]
-    ) -> Tuple[ChatRequest[T], Dict[str, FlattenMapping]]:
+    ) -> tuple[ChatRequest[T], dict[str, FlattenMapping]]:
         """Flatten nested tool schemas when the target model needs it.
 
         Returns a (possibly rewritten) request plus ``{tool_name: mapping}`` for
@@ -150,8 +142,8 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
         if not self._should_flatten_tool_params(model):
             return request, {}
 
-        new_tools: List[ToolSchema] = []
-        mappings: Dict[str, FlattenMapping] = {}
+        new_tools: list[ToolSchema] = []
+        mappings: dict[str, FlattenMapping] = {}
         changed = False
         for tool in request.tools:
             flat_schema, mapping = flatten_tool_schema(tool.input_schema)
@@ -173,7 +165,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
         return dataclasses.replace(request, tools=new_tools), mappings
 
     def _maybe_renest_tool_calls(
-        self, response: ChatResponse[T], mappings: Dict[str, FlattenMapping]
+        self, response: ChatResponse[T], mappings: dict[str, FlattenMapping]
     ) -> ChatResponse[T]:
         """Re-nest flattened tool-call arguments using the per-tool mappings."""
         if not mappings or not response.tool_calls:
@@ -191,7 +183,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
         ]
         return dataclasses.replace(response, tool_calls=restored)
 
-    def _decode_structured_dict(self, text: str) -> Dict[str, Any]:
+    def _decode_structured_dict(self, text: str) -> dict[str, Any]:
         """Decode a JSON object from response text for ``response_schema`` calls.
 
         Uses the robust ``extract_json`` heuristics, then ``json.loads``. On
@@ -204,50 +196,43 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
             raise JSONParseFailedError(
                 f"Failed to decode JSON for response_schema: {e}", cause=e
             ) from e
-    
-    def _handle_structured_output(
-        self, 
-        text: str, 
-        output_type: Optional[Type[T]]
-    ) -> Optional[T]:
+
+    def _handle_structured_output(self, text: str, output_type: type[T] | None) -> T | None:
         """
         Handle structured output parsing.
-        
+
         Args:
             text: Response text
             output_type: Optional type to parse into
-            
+
         Returns:
             Parsed structured data or None
         """
         if output_type is None:
             return None
-        
+
         try:
             return parse_structured_output(text, output_type)
         except Exception:
             # If parsing fails, return None (raw message will still be available)
             return None
-    
+
     def _classify_and_raise_error(
-        self,
-        error: Exception,
-        operation_name: str,
-        status_code: Optional[int] = None
+        self, error: Exception, operation_name: str, status_code: int | None = None
     ) -> None:
         """
         Classify an error and raise appropriate LLMError.
-        
+
         Args:
             error: Original exception
             operation_name: Name of the operation that failed
             status_code: Optional HTTP status code
         """
         error_type, retryable = classify_error(str(error), status_code, error)
-        
+
         # Create appropriate error based on type
         error_message = str(error)
-        
+
         if error_type.value == "connection_failed":
             raise ConnectionFailedError(error_message, operation_name, error) from error
         elif error_type.value == "timeout":
@@ -259,10 +244,9 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
                 message=error_message,
                 retryable=retryable,
                 operation=operation_name,
-                cause=error
+                cause=error,
             ) from error
-    
+
     def _get_timeout(self) -> float:
         """Get configured timeout."""
         return self._config.timeout
-

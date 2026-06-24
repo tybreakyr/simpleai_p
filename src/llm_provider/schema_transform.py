@@ -20,14 +20,14 @@ All functions here are pure and provider-agnostic.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 # Path separator for flattened keys. Two underscores so a single ``_`` inside an
 # existing property name can't accidentally collide with a flattened path.
 SEP = "__"
 
 # A mapping records, per produced flat key, the nested path needed to rebuild it.
-FlattenMapping = Dict[str, List[str]]
+FlattenMapping = dict[str, list[str]]
 
 
 def _is_flattenable_object(prop_schema: Any) -> bool:
@@ -57,7 +57,7 @@ def schema_has_flattenable_nesting(input_schema: Any) -> bool:
     return any(_is_flattenable_object(child) for child in props.values())
 
 
-def flatten_tool_schema(input_schema: Dict[str, Any]) -> Tuple[Dict[str, Any], FlattenMapping]:
+def flatten_tool_schema(input_schema: dict[str, Any]) -> tuple[dict[str, Any], FlattenMapping]:
     """Flatten nested fixed-key objects in a tool ``input_schema``.
 
     Returns ``(flat_schema, mapping)``. ``mapping`` maps each *flattened* leaf key
@@ -68,12 +68,17 @@ def flatten_tool_schema(input_schema: Dict[str, Any]) -> Tuple[Dict[str, Any], F
     if not schema_has_flattenable_nesting(input_schema):
         return input_schema, {}
 
-    flat_props: Dict[str, Any] = {}
-    flat_required: List[str] = []
+    flat_props: dict[str, Any] = {}
+    flat_required: list[str] = []
     mapping: FlattenMapping = {}
 
-    def _walk(obj_schema: Dict[str, Any], prefix_key: str, prefix_path: List[str], ancestors_required: bool) -> None:
-        sub_props: Dict[str, Any] = obj_schema.get("properties", {}) or {}
+    def _walk(
+        obj_schema: dict[str, Any],
+        prefix_key: str,
+        prefix_path: list[str],
+        ancestors_required: bool,
+    ) -> None:
+        sub_props: dict[str, Any] = obj_schema.get("properties", {}) or {}
         sub_required = set(obj_schema.get("required", []) or [])
         for name, child in sub_props.items():
             flat_key = f"{prefix_key}{SEP}{name}" if prefix_key else name
@@ -92,16 +97,14 @@ def flatten_tool_schema(input_schema: Dict[str, Any]) -> Tuple[Dict[str, Any], F
 
     _walk(input_schema, "", [], True)
 
-    flat_schema = {
-        k: v for k, v in input_schema.items() if k not in ("properties", "required")
-    }
+    flat_schema = {k: v for k, v in input_schema.items() if k not in ("properties", "required")}
     flat_schema["properties"] = flat_props
     if flat_required:
         flat_schema["required"] = flat_required
     return flat_schema, mapping
 
 
-def renest_arguments(flat_args: Dict[str, Any], mapping: FlattenMapping) -> Dict[str, Any]:
+def renest_arguments(flat_args: dict[str, Any], mapping: FlattenMapping) -> dict[str, Any]:
     """Rebuild a nested argument dict from flat args using ``mapping``.
 
     Keys absent from ``mapping`` (top-level scalars, plus anything the model
@@ -109,7 +112,7 @@ def renest_arguments(flat_args: Dict[str, Any], mapping: FlattenMapping) -> Dict
     """
     if not mapping:
         return flat_args
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for key, value in flat_args.items():
         path = mapping.get(key)
         if not path:

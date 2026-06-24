@@ -25,23 +25,29 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, TypeVar
+from typing import Any, TypeVar
 
+from ..errors import (
+    ConnectionFailedError,
+    ErrorType,
+    JSONParseFailedError,
+    LLMError,
+    ModelNotAvailableError,
+    RateLimitExceededError,
+    TimeoutError,
+)
+from ..json_extractor import parse_structured_output
 from ..models import (
-    ChatRequest, ChatResponse, Model, ProviderConfig,
+    ChatRequest,
+    ChatResponse,
+    Model,
+    ProviderConfig,
     ProviderFeatures,
 )
 from ..provider import Provider
-from ..errors import (
-    ConnectionFailedError, TimeoutError,
-    RateLimitExceededError, ModelNotAvailableError,
-    LLMError, ErrorType, JSONParseFailedError,
-)
-from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
 
-
-T = TypeVar('T')
+T = TypeVar("T")
 
 _DEFAULT_MAX_TOKENS = 8192
 
@@ -72,28 +78,28 @@ class AnthropicProvider(BaseProvider[T]):
             # Disable the SDK's built-in retries; BaseProvider handles retries.
             max_retries=0,
         )
-        self._max_tokens: int = int(
-            config.extra_settings.get("max_tokens", _DEFAULT_MAX_TOKENS)
-        )
+        self._max_tokens: int = int(config.extra_settings.get("max_tokens", _DEFAULT_MAX_TOKENS))
 
     # ------------------------------------------------------------------
     # Provider interface
     # ------------------------------------------------------------------
 
-    def _build_kwargs(self, request: ChatRequest[T]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = []
+    def _build_kwargs(self, request: ChatRequest[T]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = []
         for msg in request.messages:
             if msg.role == "assistant" and msg.tool_calls:
-                blocks: List[Dict[str, Any]] = []
+                blocks: list[dict[str, Any]] = []
                 if msg.content:
                     blocks.append({"type": "text", "text": msg.content})
                 for tc in msg.tool_calls:
-                    blocks.append({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.arguments,
-                    })
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        }
+                    )
                 messages.append({"role": "assistant", "content": blocks})
             elif msg.role == "tool":
                 result_block = {
@@ -103,14 +109,18 @@ class AnthropicProvider(BaseProvider[T]):
                 }
                 # Anthropic requires tool_result blocks to ride in a user turn;
                 # merge consecutive tool results into the same user message.
-                if messages and messages[-1]["role"] == "user" and isinstance(messages[-1]["content"], list):
+                if (
+                    messages
+                    and messages[-1]["role"] == "user"
+                    and isinstance(messages[-1]["content"], list)
+                ):
                     messages[-1]["content"].append(result_block)
                 else:
                     messages.append({"role": "user", "content": [result_block]})
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": request.model or self._config.default_model,
             "max_tokens": self._max_tokens,
             "messages": messages,
@@ -124,18 +134,20 @@ class AnthropicProvider(BaseProvider[T]):
 
         if request.response_schema is not None:
             # Force a single synthetic tool to enforce the schema.
-            kwargs["tools"] = [{
-                "name": _STRUCTURED_OUTPUT_TOOL,
-                "description": "Return the result as a structured object matching the schema.",
-                "input_schema": request.response_schema,
-            }]
+            kwargs["tools"] = [
+                {
+                    "name": _STRUCTURED_OUTPUT_TOOL,
+                    "description": "Return the result as a structured object matching the schema.",
+                    "input_schema": request.response_schema,
+                }
+            ]
             kwargs["tool_choice"] = {"type": "tool", "name": _STRUCTURED_OUTPUT_TOOL}
         elif request.tools:
             kwargs["tools"] = [
                 {
                     "name": tool.name,
                     "description": tool.description,
-                    "input_schema": tool.input_schema
+                    "input_schema": tool.input_schema,
                 }
                 for tool in request.tools
             ]
@@ -152,19 +164,18 @@ class AnthropicProvider(BaseProvider[T]):
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
         text_blocks = [
-            block.text
-            for block in response.content
-            if getattr(block, "type", None) == "text"
+            block.text for block in response.content if getattr(block, "type", None) == "text"
         ]
         message_content = "".join(text_blocks)
 
         from ..models import ToolCall
+
         tool_calls = []
         for block in response.content:
             if getattr(block, "type", None) == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
 
-        structured_data: Optional[T] = None
+        structured_data: T | None = None
         if request.response_schema is not None:
             # The forced synthetic tool carries the structured result in its
             # arguments. Surface it as structured_data and hide the tool call.
@@ -191,7 +202,7 @@ class AnthropicProvider(BaseProvider[T]):
             message=message_content,
             structured_data=structured_data,
             tool_calls=tool_calls if tool_calls else None,
-            stop_reason=getattr(response, "stop_reason", None)
+            stop_reason=getattr(response, "stop_reason", None),
         )
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
@@ -207,13 +218,12 @@ class AnthropicProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_anthropic_error(e)
 
-        return self._maybe_renest_tool_calls(
-            self._execute_with_retry(_chat, "chat"), _flat_map
-        )
+        return self._maybe_renest_tool_calls(self._execute_with_retry(_chat, "chat"), _flat_map)
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         if not hasattr(self, "_async_client"):
             from anthropic import AsyncAnthropic
+
             self._async_client = AsyncAnthropic(
                 api_key=self._config.api_key,
                 timeout=self._config.timeout,
@@ -236,8 +246,8 @@ class AnthropicProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
-    def list_models(self) -> List[Model]:
-        def _list_models() -> List[Model]:
+    def list_models(self) -> list[Model]:
+        def _list_models() -> list[Model]:
             try:
                 return [Model(name=m.id) for m in self._client.models.list()]
             except Exception as e:
@@ -276,15 +286,18 @@ class AnthropicProvider(BaseProvider[T]):
         """Map anthropic SDK exceptions to LLMError subclasses."""
         try:
             from anthropic import (
-                RateLimitError, APITimeoutError, APIConnectionError,
-                NotFoundError, AuthenticationError,
+                APIConnectionError,
+                APITimeoutError,
+                AuthenticationError,
+                NotFoundError,
+                RateLimitError,
             )
         except ImportError:
             self._classify_and_raise_error(e, "anthropic")
             return
 
         if isinstance(e, RateLimitError):
-            retry_after: Optional[float] = None
+            retry_after: float | None = None
             if hasattr(e, "response") and e.response is not None:
                 raw = e.response.headers.get("retry-after")
                 if raw:
@@ -330,7 +343,8 @@ class AnthropicProvider(BaseProvider[T]):
 # Factory function
 # ------------------------------------------------------------------
 
-def create_anthropic_provider(config_dict: Dict[str, Any]) -> Provider:
+
+def create_anthropic_provider(config_dict: dict[str, Any]) -> Provider:
     """
     Factory function to create an AnthropicProvider.
 
