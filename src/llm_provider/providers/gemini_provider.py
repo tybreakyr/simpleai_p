@@ -20,33 +20,36 @@ Supported features:
 
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, TypeVar
+import re
+import threading
+import time
+from typing import Any, TypeVar
 
+from ..errors import (
+    InvalidResponseError,
+    RateLimitExceededError,
+)
+from ..json_extractor import parse_structured_output
 from ..models import (
-    ChatRequest, ChatResponse, Model, ProviderConfig,
+    ChatRequest,
+    ChatResponse,
+    Model,
+    ProviderConfig,
     ProviderFeatures,
 )
 from ..provider import Provider
-import re
-import time
-import threading
-
-from ..errors import (
-    LLMError, ConnectionFailedError, TimeoutError,
-    InvalidResponseError, RateLimitExceededError,
-)
-from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
-
 
 # Fields Gemini's protobuf-derived tool schema does NOT accept, even though
 # they're valid JSON Schema. Adding to this set as we discover incompatibilities.
 # Documented Gemini schema accepts a subset of OpenAPI 3.0 Schema; many JSON
 # Schema features (additionalProperties, oneOf at the wrong level, $ref) are
 # rejected with "Unknown name 'X'" or "Cannot find field".
-_GEMINI_INCOMPATIBLE_SCHEMA_KEYS = frozenset({
-    "additionalProperties",
-})
+_GEMINI_INCOMPATIBLE_SCHEMA_KEYS = frozenset(
+    {
+        "additionalProperties",
+    }
+)
 
 
 def _sanitize_schema_for_gemini(schema: Any) -> Any:
@@ -66,12 +69,12 @@ def _sanitize_schema_for_gemini(schema: Any) -> Any:
     return schema
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 _GENERATE_CONTENT_METHOD = "generateContent"
 
 
-def _parse_gemini_retry_delay(error_str: str) -> Optional[float]:
+def _parse_gemini_retry_delay(error_str: str) -> float | None:
     """
     Extract the suggested retry delay (seconds) from a Gemini 429 error string.
 
@@ -117,10 +120,11 @@ class GeminiProvider(BaseProvider[T]):
         # Import here so the module can be imported without the package installed
         # (tests can mock it)
         from google import genai
+
         self._client = genai.Client(api_key=config.api_key)
 
         # Rate limiter state
-        self._rate_limit_rpm: Optional[float] = config.rate_limit
+        self._rate_limit_rpm: float | None = config.rate_limit
         self._last_request_at: float = 0.0
         self._rate_lock = threading.Lock()
 
@@ -151,7 +155,7 @@ class GeminiProvider(BaseProvider[T]):
             )
 
         contents: list[types.Content] = []
-        system_instruction: Optional[str] = (
+        system_instruction: str | None = (
             request.system_prompt.content if request.system_prompt else None
         )
 
@@ -193,19 +197,17 @@ class GeminiProvider(BaseProvider[T]):
                     )
                 )
 
-        gen_cfg_kwargs: Dict[str, Any] = {}
+        gen_cfg_kwargs: dict[str, Any] = {}
         if request.temperature is not None:
             gen_cfg_kwargs["temperature"] = request.temperature
         if request.top_p is not None:
             gen_cfg_kwargs["top_p"] = request.top_p
         if system_instruction:
             gen_cfg_kwargs["system_instruction"] = system_instruction
-            
+
         if request.response_schema is not None:
             gen_cfg_kwargs["response_mime_type"] = "application/json"
-            gen_cfg_kwargs["response_schema"] = _sanitize_schema_for_gemini(
-                request.response_schema
-            )
+            gen_cfg_kwargs["response_schema"] = _sanitize_schema_for_gemini(request.response_schema)
 
         if request.tools:
             gen_cfg_kwargs["tools"] = [
@@ -220,7 +222,7 @@ class GeminiProvider(BaseProvider[T]):
                     ]
                 }
             ]
-            
+
         if request.tool_choice:
             if request.tool_choice == "auto":
                 gen_cfg_kwargs["tool_config"] = {"function_calling_config": {"mode": "AUTO"}}
@@ -232,7 +234,7 @@ class GeminiProvider(BaseProvider[T]):
                 gen_cfg_kwargs["tool_config"] = {
                     "function_calling_config": {
                         "mode": "ANY",
-                        "allowed_function_names": [request.tool_choice]
+                        "allowed_function_names": [request.tool_choice],
                     }
                 }
 
@@ -244,7 +246,7 @@ class GeminiProvider(BaseProvider[T]):
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
         message_content: str = response.text or ""
-        
+
         from ..models import ToolCall
 
         def _coerce_args(args):
@@ -254,6 +256,7 @@ class GeminiProvider(BaseProvider[T]):
                 return args
             try:
                 import json
+
                 return json.loads(args) if isinstance(args, str) else {}
             except Exception:
                 return {}
@@ -271,23 +274,27 @@ class GeminiProvider(BaseProvider[T]):
             fc = getattr(part, "function_call", None)
             if not fc:
                 continue
-            tool_calls.append(ToolCall(
-                id=getattr(fc, "id", None) or ToolCall.make_id(),
-                name=fc.name,
-                arguments=_coerce_args(fc.args),
-                thought_signature=getattr(part, "thought_signature", None),
-            ))
+            tool_calls.append(
+                ToolCall(
+                    id=getattr(fc, "id", None) or ToolCall.make_id(),
+                    name=fc.name,
+                    arguments=_coerce_args(fc.args),
+                    thought_signature=getattr(part, "thought_signature", None),
+                )
+            )
 
         # Fallback: flattened convenience accessor (no signature available).
         if not tool_calls and getattr(response, "function_calls", None):
             for fc in response.function_calls:
-                tool_calls.append(ToolCall(
-                    id=getattr(fc, "id", None) or ToolCall.make_id(),
-                    name=fc.name,
-                    arguments=_coerce_args(fc.args),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=getattr(fc, "id", None) or ToolCall.make_id(),
+                        name=fc.name,
+                        arguments=_coerce_args(fc.args),
+                    )
+                )
 
-        structured_data: Optional[T] = None
+        structured_data: T | None = None
         if request.response_schema is not None and not tool_calls:
             structured_data = self._decode_structured_dict(message_content)
         elif request.structured_output_type and not tool_calls:
@@ -302,7 +309,7 @@ class GeminiProvider(BaseProvider[T]):
             message=message_content,
             structured_data=structured_data,
             tool_calls=tool_calls if tool_calls else None,
-            stop_reason=None
+            stop_reason=None,
         )
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
@@ -329,10 +336,10 @@ class GeminiProvider(BaseProvider[T]):
                         message=(
                             "Gemini daily quota exhausted — will not retry until quota resets. "
                             "Consider upgrading to a paid tier or reducing pipeline frequency."
-                            if daily else
-                            f"Gemini rate limit exceeded. "
-                            f"Retry after {retry_after:.0f}s." if retry_after else
-                            "Gemini rate limit exceeded."
+                            if daily
+                            else f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s."
+                            if retry_after
+                            else "Gemini rate limit exceeded."
                         ),
                         operation="chat",
                         cause=e,
@@ -341,9 +348,7 @@ class GeminiProvider(BaseProvider[T]):
                     ) from e
                 self._classify_and_raise_error(e, "chat")
 
-        return self._maybe_renest_tool_calls(
-            self._execute_with_retry(_chat, "chat"), _flat_map
-        )
+        return self._maybe_renest_tool_calls(self._execute_with_retry(_chat, "chat"), _flat_map)
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         request, _flat_map = self._maybe_flatten_tools(request)
@@ -365,12 +370,14 @@ class GeminiProvider(BaseProvider[T]):
                     daily = _is_daily_quota(error_str)
                     retry_after = None if daily else _parse_gemini_retry_delay(error_str)
                     from ..errors import RateLimitExceededError
+
                     raise RateLimitExceededError(
                         message=(
                             "Gemini daily quota exhausted — will not retry until quota resets. "
-                            if daily else
-                            f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s." if retry_after else
-                            "Gemini rate limit exceeded."
+                            if daily
+                            else f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s."
+                            if retry_after
+                            else "Gemini rate limit exceeded."
                         ),
                         operation="achat",
                         cause=e,
@@ -383,10 +390,10 @@ class GeminiProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
-    def list_models(self) -> List[Model]:
+    def list_models(self) -> list[Model]:
         """List Gemini models that support content generation."""
 
-        def _list_models() -> List[Model]:
+        def _list_models() -> list[Model]:
             try:
                 return [
                     Model(name=m.name)
@@ -413,7 +420,7 @@ class GeminiProvider(BaseProvider[T]):
             structured_output=True,
             streaming=True,
             vision=True,
-            context_window=1_000_000,   # Gemini 1.5 Pro
+            context_window=1_000_000,  # Gemini 1.5 Pro
             supported_roles=["user", "model"],
             function_calling=True,
             temperature=True,
@@ -426,7 +433,8 @@ class GeminiProvider(BaseProvider[T]):
 # Factory function
 # ------------------------------------------------------------------
 
-def create_gemini_provider(config_dict: Dict[str, Any]) -> Provider:
+
+def create_gemini_provider(config_dict: dict[str, Any]) -> Provider:
     """
     Factory function to create a GeminiProvider.
 

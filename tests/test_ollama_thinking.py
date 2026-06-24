@@ -16,10 +16,9 @@ Integration tests run against a live Ollama server and are skipped when the
 model is not available.
 """
 
-import sys
 import os
+import sys
 import unittest
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -91,23 +90,17 @@ class TestThinkingPayloadConstruction(unittest.TestCase):
     def test_extra_body_overrides_extra_settings_disabled_to_enabled(self):
         """Per-request extra_body must win over provider-level extra_settings."""
         provider = _provider(extra_settings={"think": False})
-        payload = provider._build_payload(
-            _req(extra_body={"ollama": {"think": True}})
-        )
+        payload = provider._build_payload(_req(extra_body={"ollama": {"think": True}}))
         self.assertIs(payload["think"], True)
 
     def test_extra_body_overrides_extra_settings_enabled_to_disabled(self):
         provider = _provider(extra_settings={"think": True})
-        payload = provider._build_payload(
-            _req(extra_body={"ollama": {"think": False}})
-        )
+        payload = provider._build_payload(_req(extra_body={"ollama": {"think": False}}))
         self.assertIs(payload["think"], False)
 
     def test_other_provider_bucket_does_not_set_think(self):
         provider = _provider()
-        payload = provider._build_payload(
-            _req(extra_body={"openai": {"think": True}})
-        )
+        payload = provider._build_payload(_req(extra_body={"openai": {"think": True}}))
         self.assertNotIn("think", payload)
 
     def test_model_is_forwarded_correctly(self):
@@ -124,6 +117,7 @@ class TestThinkingPayloadConstruction(unittest.TestCase):
 def _ollama_has_model(model_name: str) -> bool:
     try:
         import requests
+
         resp = requests.get("http://localhost:11434/api/tags", timeout=5)
         resp.raise_for_status()
         models = [m["name"] for m in resp.json().get("models", [])]

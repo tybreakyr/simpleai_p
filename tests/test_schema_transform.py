@@ -9,6 +9,7 @@ from llm_provider.schema_transform import (
 
 def _nested_intentions_schema():
     """An object-of-objects, like storyteller's submit_intentions."""
+
     def _obj(with_volume=False):
         props = {
             "text": {"type": "string"},

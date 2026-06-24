@@ -6,8 +6,9 @@ import sys
 import threading
 import unittest
 from unittest.mock import MagicMock, patch
-from llm_provider.models import ProviderConfig, ChatRequest, Message, SystemPrompt
+
 from llm_provider.errors import RateLimitExceededError
+from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
 from llm_provider.retry import RetryConfig
 
 
@@ -29,12 +30,16 @@ def _make_provider(config=None):
         config = _make_config()
 
     mock_genai = MagicMock()
-    with patch.dict(sys.modules, {
-        "google": MagicMock(),
-        "google.genai": mock_genai,
-        "google.genai.types": mock_genai.types,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "google": MagicMock(),
+            "google.genai": mock_genai,
+            "google.genai.types": mock_genai.types,
+        },
+    ):
         from llm_provider.providers.gemini_provider import GeminiProvider
+
         provider = GeminiProvider.__new__(GeminiProvider)
         provider._config = config
         provider._client = MagicMock()
@@ -53,11 +58,15 @@ def _make_provider(config=None):
 class TestGeminiProviderInit(unittest.TestCase):
     def test_requires_api_key(self):
         config = _make_config(api_key=None)
-        with patch.dict("sys.modules", {
-            "google": MagicMock(),
-            "google.genai": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "google": MagicMock(),
+                "google.genai": MagicMock(),
+            },
+        ):
             from llm_provider.providers.gemini_provider import GeminiProvider
+
             with self.assertRaises(ValueError):
                 GeminiProvider(config)
 
@@ -78,11 +87,14 @@ class TestGeminiProviderInit(unittest.TestCase):
 class TestGeminiProviderChat(unittest.TestCase):
     def setUp(self):
         self.mock_genai = MagicMock()
-        self.patcher = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": self.mock_genai,
-            "google.genai.types": self.mock_genai.types,
-        })
+        self.patcher = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": self.mock_genai,
+                "google.genai.types": self.mock_genai.types,
+            },
+        )
         self.patcher.start()
         self.provider = _make_provider()
 
@@ -166,22 +178,26 @@ class TestGeminiProviderListModels(unittest.TestCase):
 class TestParseGeminiRetryDelay(unittest.TestCase):
     def test_json_style_delay(self):
         from llm_provider.providers.gemini_provider import _parse_gemini_retry_delay
+
         result = _parse_gemini_retry_delay("'retryDelay': '9s'")
         self.assertAlmostEqual(result, 10.0)
 
     def test_prose_style_delay(self):
         from llm_provider.providers.gemini_provider import _parse_gemini_retry_delay
+
         result = _parse_gemini_retry_delay("Please retry in 9.3758776s")
         self.assertAlmostEqual(result, 10.375, places=2)
 
     def test_no_delay_returns_none(self):
         from llm_provider.providers.gemini_provider import _parse_gemini_retry_delay
+
         self.assertIsNone(_parse_gemini_retry_delay("some other error"))
 
 
 class TestIsDailyQuota(unittest.TestCase):
     def test_per_day_detected(self):
         from llm_provider.providers.gemini_provider import _is_daily_quota
+
         self.assertTrue(_is_daily_quota("PerDay quota exceeded"))
         self.assertTrue(_is_daily_quota("per_day limit hit"))
         self.assertFalse(_is_daily_quota("per-minute rate limit"))
@@ -189,24 +205,37 @@ class TestIsDailyQuota(unittest.TestCase):
 
 class TestCreateGeminiProvider(unittest.TestCase):
     def test_factory_creates_provider(self):
-        with patch.dict("sys.modules", {
-            "google": MagicMock(),
-            "google.genai": MagicMock(),
-        }):
-            from llm_provider.providers.gemini_provider import create_gemini_provider, GeminiProvider
-            provider = create_gemini_provider({
-                "api_key": "test-key",
-                "default_model": "gemini-1.5-flash",
-            })
+        with patch.dict(
+            "sys.modules",
+            {
+                "google": MagicMock(),
+                "google.genai": MagicMock(),
+            },
+        ):
+            from llm_provider.providers.gemini_provider import (
+                GeminiProvider,
+                create_gemini_provider,
+            )
+
+            provider = create_gemini_provider(
+                {
+                    "api_key": "test-key",
+                    "default_model": "gemini-1.5-flash",
+                }
+            )
         self.assertIsInstance(provider, GeminiProvider)
         self.assertEqual(provider.name(), "gemini")
 
     def test_factory_requires_api_key(self):
-        with patch.dict("sys.modules", {
-            "google": MagicMock(),
-            "google.genai": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "google": MagicMock(),
+                "google.genai": MagicMock(),
+            },
+        ):
             from llm_provider.providers.gemini_provider import create_gemini_provider
+
             with self.assertRaises(ValueError):
                 create_gemini_provider({"default_model": "gemini-1.5-flash"})
 
@@ -217,6 +246,7 @@ class TestSanitizeSchemaForGemini(unittest.TestCase):
 
     def setUp(self):
         from llm_provider.providers.gemini_provider import _sanitize_schema_for_gemini
+
         self.fn = _sanitize_schema_for_gemini
 
     def test_strips_top_level_additional_properties(self):
@@ -267,12 +297,16 @@ class TestSanitizeSchemaForGemini(unittest.TestCase):
         """End-to-end: a ChatRequest with additionalProperties in a tool schema
         should have it stripped by the time it reaches the Gemini SDK call."""
         from llm_provider.models import ToolSchema
+
         mock_genai = MagicMock()
-        patcher = patch.dict(sys.modules, {
-            "google": MagicMock(),
-            "google.genai": mock_genai,
-            "google.genai.types": mock_genai.types,
-        })
+        patcher = patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.genai": mock_genai,
+                "google.genai.types": mock_genai.types,
+            },
+        )
         patcher.start()
         try:
             provider = _make_provider()

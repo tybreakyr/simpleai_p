@@ -53,6 +53,17 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "ANN", "ASYNC", "B"]
+extend-ignore = ["E501", "ANN401", "ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F841", "N806", "ANN206"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

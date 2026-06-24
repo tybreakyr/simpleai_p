@@ -668,6 +668,20 @@ MIT License
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+### Code style
+
+This project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting (configured in `pyproject.toml`). Before opening a PR, run:
+
+```bash
+pip install ruff
+ruff check .
+ruff format .
+```
+
+The CI workflow (`.github/workflows/ci.yml`) runs `ruff check` and `ruff format --check` automatically; PRs that fail the lint or format step will not be merged.
+
+### Automated checks
+
 Pull requests run an LLM **doc-drift check** (`.github/workflows/docs-check.yml`,
 `anthropics/claude-code-action`): it inspects the PR diff and, if this README or
 other docs lag the code, **pushes verified doc-fix commits straight to the PR

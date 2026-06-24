@@ -21,23 +21,29 @@ Supported features:
 from __future__ import annotations
 
 import json
-from typing import Dict, Any, List, Optional, TypeVar
+from typing import Any, TypeVar
 
+from ..errors import (
+    ConnectionFailedError,
+    ErrorType,
+    InvalidResponseError,
+    LLMError,
+    ModelNotAvailableError,
+    RateLimitExceededError,
+    TimeoutError,
+)
+from ..json_extractor import parse_structured_output
 from ..models import (
-    ChatRequest, ChatResponse, Model, ProviderConfig,
+    ChatRequest,
+    ChatResponse,
+    Model,
+    ProviderConfig,
     ProviderFeatures,
 )
 from ..provider import Provider
-from ..errors import (
-    ConnectionFailedError, TimeoutError,
-    InvalidResponseError, RateLimitExceededError,
-    ModelNotAvailableError, LLMError, ErrorType,
-)
-from ..json_extractor import parse_structured_output
 from .base_provider import BaseProvider
 
-
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class OpenAIProvider(BaseProvider[T]):
@@ -55,7 +61,7 @@ class OpenAIProvider(BaseProvider[T]):
 
         from openai import OpenAI
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "api_key": config.api_key,
             "timeout": config.timeout,
         }
@@ -69,56 +75,54 @@ class OpenAIProvider(BaseProvider[T]):
     # Provider interface
     # ------------------------------------------------------------------
 
-    def _build_kwargs(self, request: ChatRequest[T]) -> Dict[str, Any]:
-        messages: List[Dict[str, str]] = []
+    def _build_kwargs(self, request: ChatRequest[T]) -> dict[str, Any]:
+        messages: list[dict[str, str]] = []
         system_content = self._maybe_no_think(
             request.system_prompt.content if request.system_prompt else None
         )
         if system_content:
-            messages.append({
-                "role": "system",
-                "content": system_content
-            })
+            messages.append({"role": "system", "content": system_content})
 
         for msg in request.messages:
             if msg.role == "assistant" and msg.tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": json.dumps(tc.arguments),
-                            },
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content or None,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": json.dumps(tc.arguments),
+                                },
+                            }
+                            for tc in msg.tool_calls
+                        ],
+                    }
+                )
             elif msg.role == "tool":
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.tool_call_id,
-                    "content": msg.content,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id,
+                        "content": msg.content,
+                    }
+                )
             else:
-                messages.append({
-                    "role": msg.role,
-                    "content": msg.content
-                })
+                messages.append({"role": msg.role, "content": msg.content})
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": request.model or self._config.default_model,
             "messages": messages,
         }
-        
+
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
         if request.top_p is not None:
             kwargs["top_p"] = request.top_p
-            
+
         if "max_tokens" in self._config.extra_settings:
             kwargs["max_tokens"] = int(self._config.extra_settings["max_tokens"])
 
@@ -144,8 +148,8 @@ class OpenAIProvider(BaseProvider[T]):
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.input_schema
-                    }
+                        "parameters": tool.input_schema,
+                    },
                 }
                 for tool in request.tools
             ]
@@ -155,14 +159,17 @@ class OpenAIProvider(BaseProvider[T]):
             elif request.tool_choice == "any":
                 kwargs["tool_choice"] = "required"
             else:
-                kwargs["tool_choice"] = {"type": "function", "function": {"name": request.tool_choice}}
+                kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": request.tool_choice},
+                }
 
         if request.extra_body:
             kwargs.update(request.extra_body.get("openai", {}))
 
         return kwargs
 
-    def _build_response_format(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_response_format(self, schema: dict[str, Any]) -> dict[str, Any]:
         """Map a JSON Schema to an OpenAI ``response_format``.
 
         Honours ``extra_settings["structured_output_format"]``:
@@ -186,14 +193,15 @@ class OpenAIProvider(BaseProvider[T]):
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
         choice = response.choices[0] if response.choices else None
-        if not choice or (choice.message.content is None and not getattr(choice.message, "tool_calls", None)):
-            raise InvalidResponseError(
-                "OpenAI response contained no content", operation="chat"
-            )
+        if not choice or (
+            choice.message.content is None and not getattr(choice.message, "tool_calls", None)
+        ):
+            raise InvalidResponseError("OpenAI response contained no content", operation="chat")
 
         message_content = choice.message.content or ""
-        
+
         from ..models import ToolCall
+
         tool_calls = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
@@ -203,7 +211,7 @@ class OpenAIProvider(BaseProvider[T]):
                     args = tc.function.arguments if isinstance(tc.function.arguments, dict) else {}
                 tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
 
-        structured_data: Optional[T] = None
+        structured_data: T | None = None
         if request.response_schema is not None and not tool_calls:
             structured_data = self._decode_structured_dict(message_content)
         elif request.structured_output_type and not tool_calls:
@@ -218,7 +226,7 @@ class OpenAIProvider(BaseProvider[T]):
             message=message_content,
             structured_data=structured_data,
             tool_calls=tool_calls if tool_calls else None,
-            stop_reason=choice.finish_reason
+            stop_reason=choice.finish_reason,
         )
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
@@ -234,13 +242,12 @@ class OpenAIProvider(BaseProvider[T]):
             except Exception as e:
                 self._classify_openai_error(e)
 
-        return self._maybe_renest_tool_calls(
-            self._execute_with_retry(_chat, "chat"), _flat_map
-        )
+        return self._maybe_renest_tool_calls(self._execute_with_retry(_chat, "chat"), _flat_map)
 
     async def achat(self, request: ChatRequest[T]) -> ChatResponse[T]:
         if not hasattr(self, "_async_client"):
             from openai import AsyncOpenAI
+
             _async_base_url = self._config.extra_settings.get("base_url") or None
             self._async_client = AsyncOpenAI(
                 api_key=self._config.api_key,
@@ -265,8 +272,8 @@ class OpenAIProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
-    def list_models(self) -> List[Model]:
-        def _list_models() -> List[Model]:
+    def list_models(self) -> list[Model]:
+        def _list_models() -> list[Model]:
             try:
                 return [Model(name=m.id) for m in self._client.models.list()]
             except Exception as e:
@@ -305,15 +312,18 @@ class OpenAIProvider(BaseProvider[T]):
         """Map openai SDK exceptions to LLMError subclasses."""
         try:
             from openai import (
-                RateLimitError, APITimeoutError, APIConnectionError,
-                NotFoundError, AuthenticationError, APIStatusError,
+                APIConnectionError,
+                APITimeoutError,
+                AuthenticationError,
+                NotFoundError,
+                RateLimitError,
             )
         except ImportError:
             self._classify_and_raise_error(e, "openai")
             return
 
         if isinstance(e, RateLimitError):
-            retry_after: Optional[float] = None
+            retry_after: float | None = None
             if hasattr(e, "response") and e.response is not None:
                 raw = e.response.headers.get("retry-after")
                 if raw:
@@ -329,9 +339,7 @@ class OpenAIProvider(BaseProvider[T]):
             ) from e
 
         if isinstance(e, APITimeoutError):
-            raise TimeoutError(
-                f"OpenAI request timed out: {e}", operation="openai", cause=e
-            ) from e
+            raise TimeoutError(f"OpenAI request timed out: {e}", operation="openai", cause=e) from e
 
         if isinstance(e, APIConnectionError):
             raise ConnectionFailedError(
@@ -359,7 +367,8 @@ class OpenAIProvider(BaseProvider[T]):
 # Factory function
 # ------------------------------------------------------------------
 
-def create_openai_provider(config_dict: Dict[str, Any]) -> Provider:
+
+def create_openai_provider(config_dict: dict[str, Any]) -> Provider:
     """
     Factory function to create an OpenAIProvider.
 
@@ -397,7 +406,7 @@ def create_openai_provider(config_dict: Dict[str, Any]) -> Provider:
     return OpenAIProvider(provider_config)
 
 
-def create_mlx_provider(config_dict: Dict[str, Any]) -> Provider:
+def create_mlx_provider(config_dict: dict[str, Any]) -> Provider:
     """
     Factory for an mlx-lm backend, which exposes an OpenAI-compatible API.
 

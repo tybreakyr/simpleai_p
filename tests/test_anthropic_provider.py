@@ -5,11 +5,15 @@ Unit tests for the Anthropic provider implementation.
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
-from llm_provider.models import ProviderConfig, ChatRequest, Message, SystemPrompt
+
 from llm_provider.errors import (
-    RateLimitExceededError, TimeoutError, ConnectionFailedError,
-    ModelNotAvailableError, LLMError,
+    ConnectionFailedError,
+    LLMError,
+    ModelNotAvailableError,
+    RateLimitExceededError,
+    TimeoutError,
 )
+from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
 from llm_provider.retry import RetryConfig
 
 
@@ -32,6 +36,7 @@ def _make_provider(config=None):
 
     with patch.dict(sys.modules, {"anthropic": MagicMock()}):
         from llm_provider.providers.anthropic_provider import AnthropicProvider
+
         provider = AnthropicProvider.__new__(AnthropicProvider)
         provider._config = config
         provider._client = MagicMock()
@@ -70,6 +75,7 @@ class TestAnthropicProviderInit(unittest.TestCase):
         config = _make_config(api_key=None)
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             with self.assertRaises(ValueError):
                 AnthropicProvider(config)
 
@@ -94,11 +100,14 @@ class TestAnthropicProviderInit(unittest.TestCase):
         config = _make_config(extra_settings={"max_tokens": 4096})
         with patch.dict(sys.modules, {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import AnthropicProvider
+
             provider = AnthropicProvider.__new__(AnthropicProvider)
             provider._config = config
             provider._client = MagicMock()
             provider._max_tokens = int(config.extra_settings.get("max_tokens", 8192))
-            provider._retry_config = RetryConfig(max_retries=1, base_delay=0.01, max_delay=0.01, backoff_factor=1.0)
+            provider._retry_config = RetryConfig(
+                max_retries=1, base_delay=0.01, max_delay=0.01, backoff_factor=1.0
+            )
         self.assertEqual(provider._max_tokens, 4096)
 
 
@@ -189,11 +198,13 @@ class TestAnthropicProviderChat(unittest.TestCase):
 
     def test_chat_messages_mapped_correctly(self):
         self.provider._client.messages.create.return_value = _make_message_response()
-        request = ChatRequest(messages=[
-            Message(role="user", content="Hello"),
-            Message(role="assistant", content="Hi there"),
-            Message(role="user", content="How are you?"),
-        ])
+        request = ChatRequest(
+            messages=[
+                Message(role="user", content="Hello"),
+                Message(role="assistant", content="Hi there"),
+                Message(role="user", content="How are you?"),
+            ]
+        )
         self.provider.chat(request)
         call_kwargs = self.provider._client.messages.create.call_args[1]
         messages = call_kwargs["messages"]
@@ -305,38 +316,50 @@ class TestAnthropicProviderListModels(unittest.TestCase):
 class TestCreateAnthropicProvider(unittest.TestCase):
     def test_factory_creates_provider(self):
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
-            from llm_provider.providers.anthropic_provider import create_anthropic_provider, AnthropicProvider
-            provider = create_anthropic_provider({
-                "api_key": "test-key",
-                "default_model": "claude-sonnet-4-6",
-            })
+            from llm_provider.providers.anthropic_provider import (
+                AnthropicProvider,
+                create_anthropic_provider,
+            )
+
+            provider = create_anthropic_provider(
+                {
+                    "api_key": "test-key",
+                    "default_model": "claude-sonnet-4-6",
+                }
+            )
         self.assertIsInstance(provider, AnthropicProvider)
         self.assertEqual(provider.name(), "anthropic")
 
     def test_factory_requires_api_key(self):
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import create_anthropic_provider
+
             with self.assertRaises(ValueError):
                 create_anthropic_provider({"default_model": "claude-sonnet-4-6"})
 
     def test_factory_defaults_model(self):
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import create_anthropic_provider
+
             provider = create_anthropic_provider({"api_key": "test-key"})
         self.assertEqual(provider._config.default_model, "claude-sonnet-4-6")
 
     def test_factory_respects_max_tokens_extra_setting(self):
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import create_anthropic_provider
-            provider = create_anthropic_provider({
-                "api_key": "test-key",
-                "extra_settings": {"max_tokens": 4096},
-            })
+
+            provider = create_anthropic_provider(
+                {
+                    "api_key": "test-key",
+                    "extra_settings": {"max_tokens": 4096},
+                }
+            )
         self.assertEqual(provider._max_tokens, 4096)
 
     def test_factory_sets_correct_host(self):
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             from llm_provider.providers.anthropic_provider import create_anthropic_provider
+
             provider = create_anthropic_provider({"api_key": "test-key"})
         self.assertEqual(provider._config.host, "https://api.anthropic.com")
 
