@@ -15,6 +15,7 @@ Construction-time validation:
 """
 
 import importlib.util
+import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -213,6 +214,14 @@ class TestOllamaExtraBodyAndRequired(unittest.TestCase):
 
 
 class TestOllamaRequiredEmulationAsync(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.mock_httpx = MagicMock()
+        self.patcher = patch.dict(sys.modules, {"requests": MagicMock(), "httpx": self.mock_httpx})
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
     async def test_required_emulation_retries_with_nudge_async(self):
         from llm_provider.models import ChatResponse, ToolCall
 

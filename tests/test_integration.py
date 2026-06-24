@@ -47,22 +47,19 @@ class TestOllamaIntegration(unittest.TestCase):
 
         # Try to find an available model
         cls.test_model = None
+        cls.is_reachable = False
         try:
             # Create a temporary provider to check available models
-            temp_config = ProviderConfig(
-                host="http://localhost:11434",
-                default_model="llama3.1:latest",  # Try common model first
-                timeout=10.0,
-            )
             temp_provider = create_ollama_provider(
                 {
                     "host": "http://localhost:11434",
                     "default_model": "llama3.1:latest",
-                    "timeout": 10.0,
+                    "timeout": 2.0,  # Short timeout for checking
                 }
             )
 
             if temp_provider.is_available():
+                cls.is_reachable = True
                 models = temp_provider.list_models()
                 if models:
                     # Try to use a common model name
@@ -80,7 +77,7 @@ class TestOllamaIntegration(unittest.TestCase):
         except Exception:
             pass
 
-        if not cls.test_model:
+        if cls.is_reachable and not cls.test_model:
             # Fallback to common model names
             for model_name in ["llama3.1:latest", "qwen2.5:7b", "llama3.1", "mistral"]:
                 try:
@@ -88,7 +85,7 @@ class TestOllamaIntegration(unittest.TestCase):
                         {
                             "host": "http://localhost:11434",
                             "default_model": model_name,
-                            "timeout": 5.0,
+                            "timeout": 2.0,
                         }
                     )
                     if temp_provider.is_available():
@@ -113,6 +110,11 @@ class TestOllamaIntegration(unittest.TestCase):
             },
         )
         cls.factory.load_config(cls.factory_config)
+
+    def setUp(self):
+        """Skip integration tests if Ollama server is not reachable."""
+        if not getattr(self, "is_reachable", False):
+            self.skipTest("Local Ollama server not reachable on localhost:11434")
 
     def test_provider_availability(self):
         """Test that Ollama provider is available."""
