@@ -14,11 +14,19 @@ from ..errors import (
     JSONParseFailedError,
     LLMError,
     TimeoutError,
+    ValidationError,
     classify_error,
 )
 from ..json_extractor import extract_json, parse_structured_output
 from ..model_capabilities import supports_nested_tool_params
-from ..models import ChatRequest, ChatResponse, ProviderConfig, ToolCall, ToolSchema
+from ..models import (
+    ChatRequest,
+    ChatResponse,
+    ProviderConfig,
+    ToolCall,
+    ToolSchema,
+    message_has_images,
+)
 from ..provider import Provider
 from ..retry import RetryConfig, retry_with_backoff
 from ..schema_transform import FlattenMapping, flatten_tool_schema, renest_arguments
@@ -250,3 +258,15 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
     def _get_timeout(self) -> float:
         """Get configured timeout."""
         return self._config.timeout
+
+    def _assert_image_support(self, request: ChatRequest[T]) -> None:
+        """Fail fast if image content is supplied to a non-vision provider/model.
+
+        Scans the request for any ``ImagePart``/``ImageUrl`` and raises before any
+        network call when ``supported_features().vision`` is False. Providers call
+        this at the top of their request-building so no image is silently dropped.
+        """
+        if message_has_images(request.messages) and not self.supported_features().vision:
+            raise ValidationError(
+                message="Image content was supplied but this provider/model does not support vision"
+            )

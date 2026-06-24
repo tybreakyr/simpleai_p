@@ -36,9 +36,12 @@ from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImagePart,
+    ImageUrl,
     Model,
     ProviderConfig,
     ProviderFeatures,
+    TextPart,
 )
 from ..provider import Provider
 from .base_provider import BaseProvider
@@ -75,8 +78,27 @@ class OpenAIProvider(BaseProvider[T]):
     # Provider interface
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _content_to_parts(content: list[Any]) -> list[dict[str, Any]]:
+        """Translate multimodal content parts into OpenAI content items."""
+        parts: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, TextPart):
+                parts.append({"type": "text", "text": part.text})
+            elif isinstance(part, ImagePart):
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{part.media_type};base64,{part.data}"},
+                    }
+                )
+            elif isinstance(part, ImageUrl):
+                parts.append({"type": "image_url", "image_url": {"url": part.url}})
+        return parts
+
     def _build_kwargs(self, request: ChatRequest[T]) -> dict[str, Any]:
-        messages: list[dict[str, str]] = []
+        self._assert_image_support(request)
+        messages: list[dict[str, Any]] = []
         system_content = self._maybe_no_think(
             request.system_prompt.content if request.system_prompt else None
         )
@@ -110,6 +132,8 @@ class OpenAIProvider(BaseProvider[T]):
                         "content": msg.content,
                     }
                 )
+            elif isinstance(msg.content, list):
+                messages.append({"role": msg.role, "content": self._content_to_parts(msg.content)})
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
@@ -295,7 +319,11 @@ class OpenAIProvider(BaseProvider[T]):
         return ProviderFeatures(
             structured_output=True,
             streaming=True,
-            vision=True,
+            # Vision defaults on for OpenAI/Azure, but OpenAI-compatible local
+            # servers (mlx-lm) are model-dependent, so allow an explicit override
+            # via extra_settings={"vision": bool}. create_mlx_provider defaults
+            # this to False so image input is opt-in there.
+            vision=bool(self._config.extra_settings.get("vision", True)),
             context_window=128_000,
             supported_roles=["system", "user", "assistant", "tool"],
             function_calling=True,
@@ -417,10 +445,15 @@ def create_mlx_provider(config_dict: dict[str, Any]) -> Provider:
         ``"json_object"`` (mlx-lm doesn't support OpenAI's ``json_schema`` mode)
       - ``api_key`` defaults to ``"mlx-lm"`` (the OpenAI client requires some
         key; mlx-lm ignores it)
+      - ``extra_settings["vision"]`` defaults to ``False`` (mlx-lm vision is
+        model-dependent); set it to ``True`` to send images to a vision model.
     """
     cfg = dict(config_dict)
     extra = dict(cfg.get("extra_settings", {}))
     extra.setdefault("base_url", "http://localhost:8000/v1")
+    # Vision is model-dependent on mlx-lm, so make image input opt-in (mirrors
+    # the Ollama provider). An explicit vision=True passes through unchanged.
+    extra.setdefault("vision", False)
     # mlx-lm doesn't support OpenAI's json_schema response_format, so downgrade
     # to plain json_object. An explicit json_object passes through unchanged.
     if extra.get("structured_output_format") in (None, "json_schema"):

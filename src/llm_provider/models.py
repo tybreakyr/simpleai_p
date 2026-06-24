@@ -2,6 +2,7 @@
 Core data structures for the LLM provider abstraction library.
 """
 
+import base64
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Generic, TypeVar
@@ -20,6 +21,79 @@ class MessageRole(StrEnum):
 
 
 @dataclass
+class TextPart:
+    """A plain-text segment of a multimodal message."""
+
+    text: str
+
+    def __post_init__(self):
+        if not isinstance(self.text, str):
+            raise ValueError("TextPart text must be a string")
+
+
+@dataclass
+class ImagePart:
+    """An inline image carried as base64-encoded bytes plus its MIME type.
+
+    This is the universal image path: every vision-capable provider accepts
+    inline base64 data. Use :meth:`from_bytes` to build one from raw bytes.
+    """
+
+    data: str  # base64-encoded image bytes
+    media_type: str  # e.g. "image/jpeg", "image/png", "image/gif", "image/webp"
+
+    def __post_init__(self):
+        if not isinstance(self.data, str) or not self.data:
+            raise ValueError("ImagePart data must be a non-empty base64 string")
+        if not isinstance(self.media_type, str) or not self.media_type.startswith("image/"):
+            raise ValueError("ImagePart media_type must be an image/* MIME type")
+
+    @classmethod
+    def from_bytes(cls, raw: bytes, media_type: str) -> "ImagePart":
+        """Build an ImagePart from raw image bytes (pure base64 — no I/O)."""
+        return cls(base64.b64encode(raw).decode("ascii"), media_type)
+
+
+@dataclass
+class ImageUrl:
+    """A forward-only image URL.
+
+    The library NEVER fetches this URL; it is passed straight through to
+    providers that fetch it themselves (OpenAI, Anthropic), so there is no
+    server-side request-forgery surface on our side. Providers that do not
+    accept arbitrary URLs (Gemini, Ollama) raise a clear error asking for an
+    :class:`ImagePart` instead.
+    """
+
+    url: str
+
+    def __post_init__(self):
+        # Reject file:/data:/etc. so a forwarded URL can't surprise a provider.
+        if not isinstance(self.url, str) or not (
+            self.url.startswith("https://") or self.url.startswith("http://")
+        ):
+            raise ValueError("ImageUrl must be an http(s) URL")
+
+
+# A single piece of message content. A plain ``str`` content is equivalent to
+# ``[TextPart(str)]`` and remains the fully back-compatible text-only path.
+ContentPart = TextPart | ImagePart | ImageUrl
+
+
+def as_content_parts(content: "str | list[ContentPart]") -> list[ContentPart]:
+    """Normalize message content to a list of parts (str -> single TextPart)."""
+    return [TextPart(content)] if isinstance(content, str) else content
+
+
+def message_has_images(messages: list["Message"]) -> bool:
+    """Whether any message carries image content (ImagePart or ImageUrl)."""
+    return any(
+        isinstance(m.content, list) and any(isinstance(p, (ImagePart, ImageUrl)) for p in m.content)
+        for m in messages
+    )
+
+
+@dataclass
 class Message:
     """Represents a single message in a conversation.
 
@@ -34,10 +108,15 @@ class Message:
       stringified tool result.
 
     Providers translate these neutral fields into their native wire format.
+
+    ``content`` is either a plain ``str`` (text-only, the back-compatible path)
+    or a list of :data:`ContentPart` (``TextPart``/``ImagePart``/``ImageUrl``)
+    for multimodal turns. List content is only valid on ``user``/``assistant``
+    turns; tool-call and tool-result turns remain text-only.
     """
 
     role: str
-    content: str
+    content: "str | list[ContentPart]"
     tool_calls: list["ToolCall"] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -46,8 +125,19 @@ class Message:
         """Validate message after initialization."""
         if not self.role:
             raise ValueError("Message role cannot be empty")
-        if not isinstance(self.content, str):
-            raise ValueError("Message content must be a string")
+        if isinstance(self.content, str):
+            pass
+        elif isinstance(self.content, list):
+            if not self.content:
+                raise ValueError("Message content list cannot be empty")
+            if not all(isinstance(p, (TextPart, ImagePart, ImageUrl)) for p in self.content):
+                raise ValueError(
+                    "Message content list items must be TextPart, ImagePart or ImageUrl"
+                )
+            if self.role == MessageRole.TOOL.value or self.tool_calls:
+                raise ValueError("Tool-call and tool-result messages must use string content")
+        else:
+            raise ValueError("Message content must be a string or a list of content parts")
         if self.role == MessageRole.TOOL.value and not self.tool_call_id:
             raise ValueError("Tool-result message requires a tool_call_id")
 

@@ -48,6 +48,11 @@ class LLMError(Exception):
 class ValidationError(LLMError):
     """Error for configuration/input validation issues."""
 
+    # error_type is always forced to INVALID_CONFIGURATION in __post_init__, so
+    # it (and message) carry defaults here to allow ``ValidationError(message=...)``
+    # or ``ValidationError(field_errors=...)`` without a redundant error_type arg.
+    error_type: ErrorType = ErrorType.INVALID_CONFIGURATION
+    message: str = ""
     field_errors: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):

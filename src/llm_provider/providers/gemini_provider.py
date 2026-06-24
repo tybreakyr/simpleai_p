@@ -28,14 +28,18 @@ from typing import Any, TypeVar
 from ..errors import (
     InvalidResponseError,
     RateLimitExceededError,
+    ValidationError,
 )
 from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImagePart,
+    ImageUrl,
     Model,
     ProviderConfig,
     ProviderFeatures,
+    TextPart,
 )
 from ..provider import Provider
 from .base_provider import BaseProvider
@@ -143,9 +147,38 @@ class GeminiProvider(BaseProvider[T]):
                 time.sleep(min_interval - elapsed)
             self._last_request_at = time.monotonic()
 
+    @staticmethod
+    def _content_to_parts(content: list[Any], types: Any) -> list:
+        """Translate multimodal content parts into Gemini Parts.
+
+        Gemini accepts inline image bytes only — ``ImageUrl`` is rejected with a
+        clear error asking the caller to supply an ``ImagePart`` (base64) instead.
+        """
+        import base64
+
+        parts = []
+        for part in content:
+            if isinstance(part, TextPart):
+                parts.append(types.Part(text=part.text))
+            elif isinstance(part, ImagePart):
+                parts.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type=part.media_type,
+                            data=base64.b64decode(part.data),
+                        )
+                    )
+                )
+            elif isinstance(part, ImageUrl):
+                raise ValidationError(
+                    message="Gemini requires base64 image data; use ImagePart instead of ImageUrl"
+                )
+        return parts
+
     def _build_kwargs(self, request: ChatRequest[T]) -> tuple[str, list, Any]:
         from google.genai import types
 
+        self._assert_image_support(request)
         model_name = request.model or self._config.default_model
 
         messages = list(request.messages)
@@ -190,12 +223,11 @@ class GeminiProvider(BaseProvider[T]):
                 )
             else:
                 gemini_role = "model" if msg.role == "assistant" else "user"
-                contents.append(
-                    types.Content(
-                        role=gemini_role,
-                        parts=[types.Part(text=msg.content)],
-                    )
-                )
+                if isinstance(msg.content, list):
+                    parts = self._content_to_parts(msg.content, types)
+                else:
+                    parts = [types.Part(text=msg.content)]
+                contents.append(types.Content(role=gemini_role, parts=parts))
 
         gen_cfg_kwargs: dict[str, Any] = {}
         if request.temperature is not None:
