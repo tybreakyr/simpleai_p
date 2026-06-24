@@ -11,6 +11,7 @@ Install:
 Supported features:
     - Chat with system prompts (top-level system parameter)
     - Structured output (JSON extraction)
+    - Vision / multimodal input (ImagePart base64 and ImageUrl)
     - Temperature and top_p sampling
     - Up to 200k token context window (model-dependent)
 

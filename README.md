@@ -171,7 +171,9 @@ Two `ProviderConfig` knobs cover common local-model needs:
 
 The `create_mlx_provider` factory wraps the OpenAI provider with mlx-lm-friendly
 defaults (`base_url=http://localhost:8000/v1`, `structured_output_format="json_object"`,
-placeholder `api_key="mlx-lm"`).
+placeholder `api_key="mlx-lm"`, `vision=False`). Vision is opt-in for mlx-lm because
+model support varies; set `extra_settings={"vision": True}` when using a vision-capable
+mlx-vlm model.
 
 ### Tool Calling
 
@@ -396,7 +398,11 @@ else:
 
 ### Data Models
 
-- `Message`: Represents a single message in a conversation
+- `Message`: Represents a single message in a conversation; `content` is `str` or `list[ContentPart]`
+- `TextPart`: Plain-text segment of a multimodal message
+- `ImagePart`: Inline base64 image + MIME type (universal; every vision provider accepts it)
+- `ImageUrl`: Forward-only http(s) URL; passed straight to providers that fetch it (OpenAI, Anthropic)
+- `ContentPart`: Type alias for `TextPart | ImagePart | ImageUrl`
 - `SystemPrompt`: System-level instructions
 - `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
 - `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
@@ -447,6 +453,7 @@ The `extra_settings` dict is forwarded as top-level fields in the Ollama `/api/c
 |---------|------|-------------|
 | `think` | bool | Disable chain-of-thought on thinking models (e.g. `false` for Qwen3) |
 | `keep_alive` | str | Keep model in memory between requests (e.g. `"10m"`) |
+| `vision` | bool | Enable image input for vision-capable models (e.g. `llava`, `llama3.2-vision`); defaults to `False` |
 
 ```python
 ollama_config = ProviderConfig(
