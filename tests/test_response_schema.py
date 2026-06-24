@@ -29,7 +29,10 @@ from llm_provider.models import (
 )
 from llm_provider.retry import RetryConfig
 
-_HAS_GEMINI_SDK = importlib.util.find_spec("google.genai") is not None
+try:
+    _HAS_GEMINI_SDK = importlib.util.find_spec("google.genai") is not None
+except (ImportError, AttributeError):
+    _HAS_GEMINI_SDK = False
 
 _SCHEMA = {
     "type": "object",
