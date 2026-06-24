@@ -47,12 +47,16 @@ from .model_capabilities import (
 from .models import (
     ChatRequest,
     ChatResponse,
+    ContentPart,
     FactoryConfig,
+    ImagePart,
+    ImageUrl,
     Message,
     Model,
     ProviderConfig,
     ProviderFeatures,
     SystemPrompt,
+    TextPart,
     ToolCall,
     ToolSchema,
 )
@@ -81,6 +85,10 @@ __all__ = [
     "ProviderFactory",
     # Data models
     "Message",
+    "TextPart",
+    "ImagePart",
+    "ImageUrl",
+    "ContentPart",
     "SystemPrompt",
     "ChatRequest",
     "ChatResponse",

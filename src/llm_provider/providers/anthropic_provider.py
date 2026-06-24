@@ -11,6 +11,7 @@ Install:
 Supported features:
     - Chat with system prompts (top-level system parameter)
     - Structured output (JSON extraction)
+    - Vision / multimodal input (ImagePart base64 and ImageUrl)
     - Temperature and top_p sampling
     - Up to 200k token context window (model-dependent)
 
@@ -40,9 +41,12 @@ from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImagePart,
+    ImageUrl,
     Model,
     ProviderConfig,
     ProviderFeatures,
+    TextPart,
 )
 from ..provider import Provider
 from .base_provider import BaseProvider
@@ -84,7 +88,30 @@ class AnthropicProvider(BaseProvider[T]):
     # Provider interface
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _content_to_blocks(content: list[Any]) -> list[dict[str, Any]]:
+        """Translate multimodal content parts into Anthropic content blocks."""
+        blocks: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, TextPart):
+                blocks.append({"type": "text", "text": part.text})
+            elif isinstance(part, ImagePart):
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": part.media_type,
+                            "data": part.data,
+                        },
+                    }
+                )
+            elif isinstance(part, ImageUrl):
+                blocks.append({"type": "image", "source": {"type": "url", "url": part.url}})
+        return blocks
+
     def _build_kwargs(self, request: ChatRequest[T]) -> dict[str, Any]:
+        self._assert_image_support(request)
         messages: list[dict[str, Any]] = []
         for msg in request.messages:
             if msg.role == "assistant" and msg.tool_calls:
@@ -117,6 +144,8 @@ class AnthropicProvider(BaseProvider[T]):
                     messages[-1]["content"].append(result_block)
                 else:
                     messages.append({"role": "user", "content": [result_block]})
+            elif isinstance(msg.content, list):
+                messages.append({"role": msg.role, "content": self._content_to_blocks(msg.content)})
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 

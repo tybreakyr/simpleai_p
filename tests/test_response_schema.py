@@ -393,6 +393,26 @@ class TestConcurrencyAndMlx(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(es["base_url"], "http://localhost:8000/v1")
         self.assertEqual(es["structured_output_format"], "json_object")
         self.assertEqual(provider._config.api_key, "mlx-lm")
+        # Vision is opt-in on mlx-lm (model-dependent), unlike cloud OpenAI.
+        self.assertFalse(es["vision"])
+        self.assertFalse(provider.supported_features().vision)
+
+    def test_create_mlx_provider_vision_opt_in(self):
+        from llm_provider.providers import create_mlx_provider
+
+        with patch.dict(sys.modules, {"openai": MagicMock()}):
+            provider = create_mlx_provider(
+                {"default_model": "mlx-community/Qwen2-VL", "extra_settings": {"vision": True}}
+            )
+        self.assertTrue(provider.supported_features().vision)
+
+    def test_openai_vision_defaults_true(self):
+        from llm_provider.providers.openai_provider import create_openai_provider
+
+        with patch.dict(sys.modules, {"openai": MagicMock()}):
+            provider = create_openai_provider({"default_model": "gpt-4o", "api_key": "k"})
+        # Real OpenAI/Azure keep vision on by default (no extra_settings override).
+        self.assertTrue(provider.supported_features().vision)
 
 
 if __name__ == "__main__":

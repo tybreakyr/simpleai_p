@@ -25,16 +25,20 @@ from ..errors import (
     LLMError,
     ModelNotAvailableError,
     TimeoutError,
+    ValidationError,
     classify_error,
 )
 from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImagePart,
+    ImageUrl,
     Model,
     ProviderConfig,
     ProviderFeatures,
     SystemPrompt,
+    TextPart,
 )
 from ..provider import Provider
 from .base_provider import BaseProvider
@@ -70,7 +74,31 @@ class OllamaProvider(BaseProvider[T]):
             # Ollama doesn't typically use API keys, but we can add custom headers
             self._session.headers.update({"Authorization": f"Bearer {config.api_key}"})
 
+    @staticmethod
+    def _content_to_message(role: str, content: "list[Any]") -> dict[str, Any]:
+        """Build an Ollama message dict from multimodal content parts.
+
+        Ollama carries text in ``content`` and base64 images in a separate
+        ``images`` array. ``ImageUrl`` is rejected — Ollama needs inline data.
+        """
+        text_segments: list[str] = []
+        images: list[str] = []
+        for part in content:
+            if isinstance(part, TextPart):
+                text_segments.append(part.text)
+            elif isinstance(part, ImagePart):
+                images.append(part.data)
+            elif isinstance(part, ImageUrl):
+                raise ValidationError(
+                    message="Ollama requires base64 image data; use ImagePart instead of ImageUrl"
+                )
+        message: dict[str, Any] = {"role": role, "content": "".join(text_segments)}
+        if images:
+            message["images"] = images
+        return message
+
     def _build_payload(self, request: ChatRequest[T]) -> dict[str, Any]:
+        self._assert_image_support(request)
         messages = []
         system_content = self._maybe_no_think(
             request.system_prompt.content if request.system_prompt else None
@@ -103,6 +131,8 @@ class OllamaProvider(BaseProvider[T]):
                         "content": msg.content,
                     }
                 )
+            elif isinstance(msg.content, list):
+                messages.append(self._content_to_message(msg.role, msg.content))
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
@@ -409,7 +439,9 @@ class OllamaProvider(BaseProvider[T]):
         return ProviderFeatures(
             structured_output=True,  # Via JSON extraction
             streaming=True,  # Ollama supports streaming
-            vision=False,  # Ollama doesn't natively support vision in chat API
+            # Vision is model-dependent (llava, llama3.2-vision, ...). Opt in via
+            # extra_settings={"vision": True} when using a vision-capable model.
+            vision=bool(self._config.extra_settings.get("vision", False)),
             context_window=8192,  # Typical for Ollama models
             supported_roles=["system", "user", "assistant", "tool"],
             function_calling=True,
