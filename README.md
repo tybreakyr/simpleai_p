@@ -444,6 +444,8 @@ else:
 - `SystemPrompt`: System-level instructions
 - `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
 - `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
+- `ImageGenerationRequest`: Input for text-to-image generation (`prompt`, `model`, `n`, `size`, `quality`, `extra_body`)
+- `ImageGenerationResponse`: Output from image generation (`list[ImagePart]` + optional `revised_prompt`)
 - `ToolSchema`: Definition of an available tool (function)
 - `ToolCall`: A tool invocation requested by the model
 - `Model`: Represents an available LLM model
