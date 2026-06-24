@@ -6,7 +6,14 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-from .models import ChatRequest, ChatResponse, Model, ProviderFeatures
+from .models import (
+    ChatRequest,
+    ChatResponse,
+    ImageGenerationRequest,
+    ImageGenerationResponse,
+    Model,
+    ProviderFeatures,
+)
 
 T = TypeVar("T")
 
@@ -74,6 +81,29 @@ class Provider(ABC, Generic[T]):
             LLMError: If the operation fails
         """
         return await asyncio.to_thread(self.list_models)
+
+    def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        """Generate image(s) from a text prompt.
+
+        Default implementation raises, so providers without a text-to-image API
+        (Anthropic, Ollama, mlx-lm) report a clear error. OpenAI and Gemini
+        override this. Returns generated images as base64 ``ImagePart``s.
+
+        Raises:
+            ValidationError: If the provider/model does not support generation.
+            LLMError: If the request fails.
+        """
+        from .errors import ValidationError
+
+        raise ValidationError(message=f"{self.name()} does not support image generation")
+
+    async def agenerate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        """Async variant of :meth:`generate_image`.
+
+        Defaults to running the sync method in a thread; providers with a native
+        async client override this.
+        """
+        return await asyncio.to_thread(self.generate_image, request)
 
     @abstractmethod
     def name(self) -> str:

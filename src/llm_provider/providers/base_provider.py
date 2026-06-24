@@ -270,3 +270,13 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
             raise ValidationError(
                 message="Image content was supplied but this provider/model does not support vision"
             )
+
+    def _assert_image_generation_support(self) -> None:
+        """Fail fast when image generation is requested but unsupported.
+
+        Honors the ``image_generation`` capability flag so providers that share an
+        implementation but lack the endpoint (e.g. mlx-lm via the OpenAI provider)
+        opt out via ``extra_settings``.
+        """
+        if not self.supported_features().image_generation:
+            raise ValidationError(message="This provider/model does not support image generation")

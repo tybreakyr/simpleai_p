@@ -9,6 +9,7 @@ A lightweight Python library that provides a unified abstraction layer for inter
 - **Error Handling**: Comprehensive error handling with retry logic
 - **Structured Output**: Robust JSON extraction and native tool-calling capabilities.
 - **Multimodal Input**: Send images alongside text via `ImagePart` (base64) or forward-only `ImageUrl`, with fail-fast vision gating per provider.
+- **Image Generation**: Text-to-image via `generate_image()` (OpenAI `images.generate`, Gemini Imagen); results returned as `ImagePart` for symmetry with image input.
 - **Model-Aware Tool Schemas**: Automatically flatten nested tool parameters for models that can't handle them (e.g. small local Qwen models) and re-nest the response — callers always declare the natural nested schema.
 - **Async Support**: Native `asyncio` support across all providers (`achat`).
 - **Retry Mechanism**: Configurable exponential backoff retry logic (sync and async).
@@ -345,6 +346,43 @@ config = ProviderConfig(
     extra_settings={"vision": True},  # required for image input on Ollama
 )
 ```
+
+### Image generation
+
+Providers that support text-to-image expose `generate_image()` (and async
+`agenerate_image()`). Generated images come back as `ImagePart`s — the same type used for
+image *input* — so a result can be fed straight back into a `Message` for a describe/edit
+loop.
+
+```python
+from llm_provider import ImageGenerationRequest
+
+response = provider.generate_image(
+    ImageGenerationRequest(prompt="a red bicycle on a beach", size="1024x1024", n=1)
+)
+image = response.images[0]          # an ImagePart (base64 PNG)
+
+# persist it
+import base64
+with open("bike.png", "wb") as f:
+    f.write(base64.b64decode(image.data))
+
+# ...or feed it back into a chat turn
+from llm_provider import Message, TextPart
+Message(role="user", content=[TextPart("Describe this"), image])
+```
+
+**Provider support:**
+
+| Provider | Backend | Notes |
+|----------|---------|-------|
+| OpenAI | `images.generate` | Default model `gpt-image-1`; set `extra_settings["image_model"]` (e.g. `"dall-e-3"`) to override. `size`/`quality` supported. |
+| Gemini | Imagen (`generate_images`) | Default `imagen-3.0-generate-002`. Imagen sizes via aspect ratio — pass `extra_body={"gemini": {"aspect_ratio": "16:9"}}`. |
+| Anthropic / Ollama | — | No text-to-image API; raise `ValidationError`. |
+| mlx-lm | — | No images endpoint; `image_generation` defaults off, raises `ValidationError`. |
+
+Calling `generate_image()` on a provider/model without generation support raises
+`ValidationError` before any network call.
 
 ### Error Handling
 
