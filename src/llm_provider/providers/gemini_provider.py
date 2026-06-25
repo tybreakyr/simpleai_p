@@ -34,6 +34,8 @@ from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImageGenerationRequest,
+    ImageGenerationResponse,
     ImagePart,
     ImageUrl,
     Model,
@@ -422,6 +424,85 @@ class GeminiProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
+    def _raise_gemini_error(self, e: Exception, operation: str) -> None:
+        """Map a Gemini SDK exception to an LLMError (429-aware), then raise."""
+        error_str = str(e)
+        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+            daily = _is_daily_quota(error_str)
+            retry_after = None if daily else _parse_gemini_retry_delay(error_str)
+            raise RateLimitExceededError(
+                message=(
+                    "Gemini daily quota exhausted — will not retry until quota resets."
+                    if daily
+                    else f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s."
+                    if retry_after
+                    else "Gemini rate limit exceeded."
+                ),
+                operation=operation,
+                cause=e,
+                retry_after=retry_after,
+                retryable=not daily,
+            ) from e
+        self._classify_and_raise_error(e, operation)
+
+    def _build_imagen_config(self, request: ImageGenerationRequest, types: Any) -> Any:
+        cfg_kwargs: dict[str, Any] = {"number_of_images": request.n}
+        # Imagen sizing is via aspect_ratio (no size/quality params); pass any
+        # Imagen-specific knobs through extra_body["gemini"].
+        if request.extra_body:
+            cfg_kwargs.update(request.extra_body.get("gemini", {}))
+        return types.GenerateImagesConfig(**cfg_kwargs)
+
+    @staticmethod
+    def _parse_imagen_response(response: Any, model: str) -> ImageGenerationResponse:
+        images = [
+            ImagePart.from_bytes(g.image.image_bytes, "image/png")
+            for g in response.generated_images
+        ]
+        return ImageGenerationResponse(images=images, model=model)
+
+    def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        self._assert_image_generation_support()
+        from google.genai import types
+
+        def _gen() -> ImageGenerationResponse:
+            self._enforce_rate_limit()
+            model = request.model or self._config.extra_settings.get(
+                "image_model", "imagen-3.0-generate-002"
+            )
+            try:
+                response = self._client.models.generate_images(
+                    model=model,
+                    prompt=request.prompt,
+                    config=self._build_imagen_config(request, types),
+                )
+                return self._parse_imagen_response(response, model)
+            except Exception as e:
+                self._raise_gemini_error(e, "generate_image")
+
+        return self._execute_with_retry(_gen, "generate_image")
+
+    async def agenerate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        self._assert_image_generation_support()
+        from google.genai import types
+
+        async def _agen() -> ImageGenerationResponse:
+            self._enforce_rate_limit()
+            model = request.model or self._config.extra_settings.get(
+                "image_model", "imagen-3.0-generate-002"
+            )
+            try:
+                response = await self._client.aio.models.generate_images(
+                    model=model,
+                    prompt=request.prompt,
+                    config=self._build_imagen_config(request, types),
+                )
+                return self._parse_imagen_response(response, model)
+            except Exception as e:
+                self._raise_gemini_error(e, "agenerate_image")
+
+        return await self._arun_with_limit(_agen, "agenerate_image")
+
     def list_models(self) -> list[Model]:
         """List Gemini models that support content generation."""
 
@@ -452,6 +533,7 @@ class GeminiProvider(BaseProvider[T]):
             structured_output=True,
             streaming=True,
             vision=True,
+            image_generation=True,  # via Imagen (client.models.generate_images)
             context_window=1_000_000,  # Gemini 1.5 Pro
             supported_roles=["user", "model"],
             function_calling=True,

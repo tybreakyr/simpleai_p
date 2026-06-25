@@ -36,6 +36,8 @@ from ..json_extractor import parse_structured_output
 from ..models import (
     ChatRequest,
     ChatResponse,
+    ImageGenerationRequest,
+    ImageGenerationResponse,
     ImagePart,
     ImageUrl,
     Model,
@@ -296,6 +298,67 @@ class OpenAIProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
+    def _build_image_kwargs(self, request: ImageGenerationRequest) -> dict[str, Any]:
+        model = request.model or self._config.extra_settings.get("image_model", "gpt-image-1")
+        kwargs: dict[str, Any] = {"model": model, "prompt": request.prompt, "n": request.n}
+        if request.size:
+            kwargs["size"] = request.size
+        if request.quality:
+            kwargs["quality"] = request.quality
+        # gpt-image-1 returns b64_json by default and rejects response_format;
+        # dall-e-* default to URL output, so force b64_json there.
+        if model.startswith("dall-e"):
+            kwargs["response_format"] = "b64_json"
+        if request.extra_body:
+            kwargs.update(request.extra_body.get("openai", {}))
+        return kwargs
+
+    @staticmethod
+    def _parse_image_response(response: Any, model: str) -> ImageGenerationResponse:
+        images = [ImagePart(data=d.b64_json, media_type="image/png") for d in response.data]
+        revised = getattr(response.data[0], "revised_prompt", None) if response.data else None
+        return ImageGenerationResponse(images=images, model=model, revised_prompt=revised)
+
+    def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        self._assert_image_generation_support()
+
+        def _gen() -> ImageGenerationResponse:
+            kwargs = self._build_image_kwargs(request)
+            try:
+                response = self._client.images.generate(**kwargs)
+                return self._parse_image_response(response, kwargs["model"])
+            except LLMError:
+                raise
+            except Exception as e:
+                self._classify_openai_error(e)
+
+        return self._execute_with_retry(_gen, "generate_image")
+
+    async def agenerate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        self._assert_image_generation_support()
+        if not hasattr(self, "_async_client"):
+            from openai import AsyncOpenAI
+
+            _async_base_url = self._config.extra_settings.get("base_url") or None
+            self._async_client = AsyncOpenAI(
+                api_key=self._config.api_key,
+                base_url=_async_base_url,
+                timeout=self._config.timeout,
+                max_retries=0,
+            )
+
+        async def _agen() -> ImageGenerationResponse:
+            kwargs = self._build_image_kwargs(request)
+            try:
+                response = await self._async_client.images.generate(**kwargs)
+                return self._parse_image_response(response, kwargs["model"])
+            except LLMError:
+                raise
+            except Exception as e:
+                self._classify_openai_error(e)
+
+        return await self._arun_with_limit(_agen, "agenerate_image")
+
     def list_models(self) -> list[Model]:
         def _list_models() -> list[Model]:
             try:
@@ -324,6 +387,9 @@ class OpenAIProvider(BaseProvider[T]):
             # via extra_settings={"vision": bool}. create_mlx_provider defaults
             # this to False so image input is opt-in there.
             vision=bool(self._config.extra_settings.get("vision", True)),
+            # Image generation (images.generate) is OpenAI-only; mlx-lm has no such
+            # endpoint, so create_mlx_provider opts out via extra_settings.
+            image_generation=bool(self._config.extra_settings.get("image_generation", True)),
             context_window=128_000,
             supported_roles=["system", "user", "assistant", "tool"],
             function_calling=True,
@@ -447,6 +513,8 @@ def create_mlx_provider(config_dict: dict[str, Any]) -> Provider:
         key; mlx-lm ignores it)
       - ``extra_settings["vision"]`` defaults to ``False`` (mlx-lm vision is
         model-dependent); set it to ``True`` to send images to a vision model.
+      - ``extra_settings["image_generation"]`` defaults to ``False`` (mlx-lm has
+        no images endpoint).
     """
     cfg = dict(config_dict)
     extra = dict(cfg.get("extra_settings", {}))
@@ -454,6 +522,8 @@ def create_mlx_provider(config_dict: dict[str, Any]) -> Provider:
     # Vision is model-dependent on mlx-lm, so make image input opt-in (mirrors
     # the Ollama provider). An explicit vision=True passes through unchanged.
     extra.setdefault("vision", False)
+    # mlx-lm has no /images/generations endpoint; disable image generation.
+    extra.setdefault("image_generation", False)
     # mlx-lm doesn't support OpenAI's json_schema response_format, so downgrade
     # to plain json_object. An explicit json_object passes through unchanged.
     if extra.get("structured_output_format") in (None, "json_schema"):

@@ -205,6 +205,27 @@ class ToolCall:
 _KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "ollama"})
 
 
+def _validate_extra_body(extra_body: dict[str, dict[str, Any]] | None) -> None:
+    """Validate a per-provider ``extra_body`` passthrough mapping.
+
+    Top-level keys must be known provider names and each value a dict, so typos
+    don't silently no-op. Shared by ``ChatRequest`` and ``ImageGenerationRequest``.
+    """
+    if extra_body is None:
+        return
+    if not isinstance(extra_body, dict):
+        raise ValueError("extra_body must be a dict of provider-name -> dict")
+    unknown = set(extra_body) - _KNOWN_PROVIDERS
+    if unknown:
+        raise ValueError(
+            f"extra_body has unknown provider key(s) {sorted(unknown)}; "
+            f"allowed: {sorted(_KNOWN_PROVIDERS)}"
+        )
+    for k, v in extra_body.items():
+        if not isinstance(v, dict):
+            raise ValueError(f"extra_body[{k!r}] must be a dict; got {type(v).__name__}")
+
+
 @dataclass
 class ChatRequest(Generic[T]):
     """Input structure for chat operations."""
@@ -241,18 +262,51 @@ class ChatRequest(Generic[T]):
                 raise ValueError("response_schema must be a dict (JSON Schema)")
             if self.tools:
                 raise ValueError("response_schema cannot be combined with caller-supplied tools")
-        if self.extra_body is not None:
-            if not isinstance(self.extra_body, dict):
-                raise ValueError("extra_body must be a dict of provider-name -> dict")
-            unknown = set(self.extra_body) - _KNOWN_PROVIDERS
-            if unknown:
-                raise ValueError(
-                    f"extra_body has unknown provider key(s) {sorted(unknown)}; "
-                    f"allowed: {sorted(_KNOWN_PROVIDERS)}"
-                )
-            for k, v in self.extra_body.items():
-                if not isinstance(v, dict):
-                    raise ValueError(f"extra_body[{k!r}] must be a dict; got {type(v).__name__}")
+        _validate_extra_body(self.extra_body)
+
+
+@dataclass
+class ImageGenerationRequest:
+    """Input structure for text-to-image generation.
+
+    ``prompt`` is the only required field. Generic params (``n``, ``size``,
+    ``quality``) map to each provider where supported; provider-specific knobs go
+    through ``extra_body`` (same per-provider passthrough contract as
+    :class:`ChatRequest`, e.g. ``{"gemini": {"aspect_ratio": "16:9"}}``).
+    """
+
+    prompt: str
+    model: str | None = None
+    n: int = 1
+    size: str | None = None  # e.g. "1024x1024" (OpenAI); Gemini uses aspect_ratio via extra_body
+    quality: str | None = None  # provider-specific (OpenAI: "standard"/"hd" or "low"/"high")
+    extra_body: dict[str, dict[str, Any]] | None = None
+
+    def __post_init__(self):
+        if not self.prompt or not isinstance(self.prompt, str):
+            raise ValueError("ImageGenerationRequest prompt must be a non-empty string")
+        if self.n < 1:
+            raise ValueError("ImageGenerationRequest n must be >= 1")
+        _validate_extra_body(self.extra_body)
+
+
+@dataclass
+class ImageGenerationResponse:
+    """Output of a text-to-image generation call.
+
+    Generated images are returned as :class:`ImagePart` (base64), symmetric with
+    image *input* so an image can be fed straight back into a chat ``Message``.
+    """
+
+    images: list[ImagePart]
+    model: str | None = None
+    revised_prompt: str | None = None  # DALL·E-3 returns a revised prompt; None elsewhere
+
+    def __post_init__(self):
+        if not self.images:
+            raise ValueError("ImageGenerationResponse must contain at least one image")
+        if not all(isinstance(p, ImagePart) for p in self.images):
+            raise ValueError("ImageGenerationResponse images must all be ImagePart")
 
 
 @dataclass
@@ -289,6 +343,7 @@ class ProviderFeatures:
     structured_output: bool = False
     streaming: bool = False
     vision: bool = False
+    image_generation: bool = False
     context_window: int = 0
     supported_roles: list[str] = field(default_factory=lambda: ["user", "assistant"])
     function_calling: bool = False
