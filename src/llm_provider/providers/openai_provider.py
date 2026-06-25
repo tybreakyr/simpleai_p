@@ -16,10 +16,14 @@ Supported features:
     - Temperature and top_p sampling
     - Function calling
     - Up to 128k token context window (model-dependent)
+    - Image generation (``images.generate``, default ``gpt-image-1``)
+    - Image editing / inpainting (``images.edit`` + optional mask)
+    - Image variations (``images.create_variation``, ``dall-e-2`` only)
 """
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, TypeVar
 
@@ -31,6 +35,7 @@ from ..errors import (
     ModelNotAvailableError,
     RateLimitExceededError,
     TimeoutError,
+    ValidationError,
 )
 from ..json_extractor import parse_structured_output
 from ..models import (
@@ -314,6 +319,56 @@ class OpenAIProvider(BaseProvider[T]):
         return kwargs
 
     @staticmethod
+    def _image_part_to_file(part: ImagePart) -> tuple[str, bytes, str]:
+        """Convert an ImagePart into the SDK's ``FileTypes`` upload tuple."""
+        ext = part.media_type.split("/", 1)[-1] or "png"
+        return (f"image.{ext}", base64.b64decode(part.data), part.media_type)
+
+    def _build_edit_kwargs(self, request: ImageGenerationRequest) -> dict[str, Any]:
+        model = request.model or self._config.extra_settings.get("image_model", "gpt-image-1")
+        # gpt-image-1 accepts multiple source images; dall-e-2 a single one.
+        if isinstance(request.image, list):
+            image: Any = [self._image_part_to_file(p) for p in request.image]
+        else:
+            image = self._image_part_to_file(request.image)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "image": image,
+            "prompt": request.prompt,
+            "n": request.n,
+        }
+        if request.mask:
+            kwargs["mask"] = self._image_part_to_file(request.mask)
+        if request.size:
+            kwargs["size"] = request.size
+        if request.quality:
+            kwargs["quality"] = request.quality
+        if model.startswith("dall-e"):
+            kwargs["response_format"] = "b64_json"
+        if request.extra_body:
+            kwargs.update(request.extra_body.get("openai", {}))
+        return kwargs
+
+    def _build_variation_kwargs(self, request: ImageGenerationRequest) -> dict[str, Any]:
+        # create_variation takes exactly one image and is dall-e-2 only.
+        if isinstance(request.image, list):
+            raise ValidationError(
+                message="Image variations accept a single source image, not a list"
+            )
+        model = request.model or self._config.extra_settings.get("variation_model", "dall-e-2")
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "image": self._image_part_to_file(request.image),
+            "n": request.n,
+            "response_format": "b64_json",
+        }
+        if request.size:
+            kwargs["size"] = request.size
+        if request.extra_body:
+            kwargs.update(request.extra_body.get("openai", {}))
+        return kwargs
+
+    @staticmethod
     def _parse_image_response(response: Any, model: str) -> ImageGenerationResponse:
         images = [ImagePart(data=d.b64_json, media_type="image/png") for d in response.data]
         revised = getattr(response.data[0], "revised_prompt", None) if response.data else None
@@ -323,9 +378,16 @@ class OpenAIProvider(BaseProvider[T]):
         self._assert_image_generation_support()
 
         def _gen() -> ImageGenerationResponse:
-            kwargs = self._build_image_kwargs(request)
             try:
-                response = self._client.images.generate(**kwargs)
+                if request.image is None:
+                    kwargs = self._build_image_kwargs(request)
+                    response = self._client.images.generate(**kwargs)
+                elif request.is_variation:
+                    kwargs = self._build_variation_kwargs(request)
+                    response = self._client.images.create_variation(**kwargs)
+                else:
+                    kwargs = self._build_edit_kwargs(request)
+                    response = self._client.images.edit(**kwargs)
                 return self._parse_image_response(response, kwargs["model"])
             except LLMError:
                 raise
@@ -348,9 +410,16 @@ class OpenAIProvider(BaseProvider[T]):
             )
 
         async def _agen() -> ImageGenerationResponse:
-            kwargs = self._build_image_kwargs(request)
             try:
-                response = await self._async_client.images.generate(**kwargs)
+                if request.image is None:
+                    kwargs = self._build_image_kwargs(request)
+                    response = await self._async_client.images.generate(**kwargs)
+                elif request.is_variation:
+                    kwargs = self._build_variation_kwargs(request)
+                    response = await self._async_client.images.create_variation(**kwargs)
+                else:
+                    kwargs = self._build_edit_kwargs(request)
+                    response = await self._async_client.images.edit(**kwargs)
                 return self._parse_image_response(response, kwargs["model"])
             except LLMError:
                 raise

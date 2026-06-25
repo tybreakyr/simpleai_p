@@ -267,35 +267,74 @@ class ChatRequest(Generic[T]):
 
 @dataclass
 class ImageGenerationRequest:
-    """Input structure for text-to-image generation.
+    """Input structure for image generation and editing (text→image and img2img).
 
-    ``prompt`` is the only required field. Generic params (``n``, ``size``,
-    ``quality``) map to each provider where supported; provider-specific knobs go
-    through ``extra_body`` (same per-provider passthrough contract as
-    :class:`ChatRequest`, e.g. ``{"gemini": {"aspect_ratio": "16:9"}}``).
+    For pure text→image, ``prompt`` is the only required field. Supplying a source
+    ``image`` switches to **img2img** and routes to the provider's edit endpoint:
+
+    - ``image`` + ``prompt`` → **edit** (OpenAI ``images.edit``, Gemini flash image).
+    - ``image`` + ``prompt`` + ``mask`` → **inpainting** (OpenAI only; the mask marks
+      the region to change).
+    - ``image`` alone (no ``prompt``) → **variation** (OpenAI ``images.create_variation``).
+
+    Generic params (``n``, ``size``, ``quality``) map to each provider where supported;
+    provider-specific knobs go through ``extra_body`` (same per-provider passthrough
+    contract as :class:`ChatRequest`, e.g. ``{"gemini": {"aspect_ratio": "16:9"}}``).
     """
 
-    prompt: str
+    prompt: str | None = None
     model: str | None = None
     n: int = 1
     size: str | None = None  # e.g. "1024x1024" (OpenAI); Gemini uses aspect_ratio via extra_body
     quality: str | None = None  # provider-specific (OpenAI: "standard"/"hd" or "low"/"high")
     extra_body: dict[str, dict[str, Any]] | None = None
+    # img2img source: one or more images to edit/vary. None → pure text→image.
+    image: "ImagePart | list[ImagePart] | None" = None
+    # Optional inpainting mask (OpenAI only); marks the region of ``image`` to change.
+    mask: "ImagePart | None" = None
 
     def __post_init__(self):
-        if not self.prompt or not isinstance(self.prompt, str):
-            raise ValueError("ImageGenerationRequest prompt must be a non-empty string")
+        if self.image is None:
+            # Pure text→image: prompt is required.
+            if not self.prompt or not isinstance(self.prompt, str):
+                raise ValueError("ImageGenerationRequest prompt must be a non-empty string")
+        else:
+            # img2img: prompt is optional (absent → variation), but if given must be a str.
+            if self.prompt is not None and not isinstance(self.prompt, str):
+                raise ValueError("ImageGenerationRequest prompt must be a string")
+            imgs = self.image if isinstance(self.image, list) else [self.image]
+            if not imgs or not all(isinstance(p, ImagePart) for p in imgs):
+                raise ValueError(
+                    "ImageGenerationRequest image must be an ImagePart or list of them"
+                )
+        if self.mask is not None:
+            if not isinstance(self.mask, ImagePart):
+                raise ValueError("ImageGenerationRequest mask must be an ImagePart")
+            if self.image is None:
+                raise ValueError("ImageGenerationRequest mask requires a source image")
+            if not self.prompt:
+                raise ValueError("ImageGenerationRequest mask (inpainting) requires a prompt")
         if self.n < 1:
             raise ValueError("ImageGenerationRequest n must be >= 1")
         _validate_extra_body(self.extra_body)
 
+    @property
+    def is_edit(self) -> bool:
+        """True when a source image and a prompt are present (edit/inpainting)."""
+        return self.image is not None and bool(self.prompt)
+
+    @property
+    def is_variation(self) -> bool:
+        """True when a source image is present but no prompt (variation)."""
+        return self.image is not None and not self.prompt
+
 
 @dataclass
 class ImageGenerationResponse:
-    """Output of a text-to-image generation call.
+    """Output of an image generation or editing call.
 
-    Generated images are returned as :class:`ImagePart` (base64), symmetric with
-    image *input* so an image can be fed straight back into a chat ``Message``.
+    Images are returned as :class:`ImagePart` (base64), symmetric with image
+    *input* so a result can be fed straight back into a chat ``Message``.
     """
 
     images: list[ImagePart]

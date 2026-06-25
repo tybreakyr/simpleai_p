@@ -83,14 +83,19 @@ class Provider(ABC, Generic[T]):
         return await asyncio.to_thread(self.list_models)
 
     def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
-        """Generate image(s) from a text prompt.
+        """Generate or edit image(s).
 
-        Default implementation raises, so providers without a text-to-image API
+        With only a ``prompt`` this is text→image. Supplying a source ``image`` on
+        the request switches to img2img: ``image`` + ``prompt`` routes to the
+        provider's edit endpoint (add a ``mask`` for OpenAI inpainting), and
+        ``image`` alone (no prompt) routes to OpenAI variations.
+
+        Default implementation raises, so providers without an image API
         (Anthropic, Ollama, mlx-lm) report a clear error. OpenAI and Gemini
-        override this. Returns generated images as base64 ``ImagePart``s.
+        override this. Returns images as base64 ``ImagePart``s.
 
         Raises:
-            ValidationError: If the provider/model does not support generation.
+            ValidationError: If the provider/model does not support the request.
             LLMError: If the request fails.
         """
         from .errors import ValidationError

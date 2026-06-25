@@ -9,7 +9,7 @@ A lightweight Python library that provides a unified abstraction layer for inter
 - **Error Handling**: Comprehensive error handling with retry logic
 - **Structured Output**: Robust JSON extraction and native tool-calling capabilities.
 - **Multimodal Input**: Send images alongside text via `ImagePart` (base64) or forward-only `ImageUrl`, with fail-fast vision gating per provider.
-- **Image Generation**: Text-to-image via `generate_image()` (OpenAI `images.generate`, Gemini Imagen); results returned as `ImagePart` for symmetry with image input.
+- **Image Generation & Editing**: Text-to-image plus img2img (editing, inpainting, variations) via `generate_image()` — supply a source `image` (+`mask`) to route to the provider's edit endpoint; results returned as `ImagePart` for symmetry with image input.
 - **Model-Aware Tool Schemas**: Automatically flatten nested tool parameters for models that can't handle them (e.g. small local Qwen models) and re-nest the response — callers always declare the natural nested schema.
 - **Async Support**: Native `asyncio` support across all providers (`achat`).
 - **Retry Mechanism**: Configurable exponential backoff retry logic (sync and async).
@@ -372,17 +372,38 @@ from llm_provider import Message, TextPart
 Message(role="user", content=[TextPart("Describe this"), image])
 ```
 
+#### Editing, inpainting, and variations (img2img)
+
+Supplying a source `image` on the request switches `generate_image()` to img2img and
+routes to the provider's edit endpoint — same method, no new call:
+
+```python
+from llm_provider import ImageGenerationRequest, ImagePart
+
+src = ImagePart.from_bytes(open("photo.png", "rb").read(), "image/png")
+
+# Edit — source image + prompt
+provider.generate_image(ImageGenerationRequest(prompt="make it a snowy night", image=src))
+
+# Inpainting — restrict the edit to a masked region (OpenAI only)
+mask = ImagePart.from_bytes(open("mask.png", "rb").read(), "image/png")
+provider.generate_image(ImageGenerationRequest(prompt="replace the sky", image=src, mask=mask))
+
+# Variation — source image, no prompt (OpenAI only)
+provider.generate_image(ImageGenerationRequest(image=src))
+```
+
 **Provider support:**
 
-| Provider | Backend | Notes |
-|----------|---------|-------|
-| OpenAI | `images.generate` | Default model `gpt-image-1`; set `extra_settings["image_model"]` (e.g. `"dall-e-3"`) to override. `size`/`quality` supported. |
-| Gemini | Imagen (`generate_images`) | Default `imagen-3.0-generate-002`. Imagen sizes via aspect ratio — pass `extra_body={"gemini": {"aspect_ratio": "16:9"}}`. |
-| Anthropic / Ollama | — | No text-to-image API; raise `ValidationError`. |
-| mlx-lm | — | No images endpoint; `image_generation` defaults off, raises `ValidationError`. |
+| Provider | Text→image | Edit / inpaint / variation | Notes |
+|----------|-----------|----------------------------|-------|
+| OpenAI | `images.generate` | `images.edit` (+`mask` for inpainting), `images.create_variation` (no prompt) | Default model `gpt-image-1`; set `extra_settings["image_model"]` to override (e.g. `"dall-e-3"`). Variations default to `dall-e-2` (`extra_settings["variation_model"]`). `size`/`quality` supported. |
+| Gemini | Imagen (`generate_images`) | flash image (`generate_content`, image+text→image) | Generation default `imagen-3.0-generate-002`; edit default `gemini-3.1-flash-image` (override via `extra_settings["image_edit_model"]`). **No mask input** — a `mask` raises `ValidationError`; variations (no prompt) are unsupported. Imagen sizes via `extra_body={"gemini": {"aspect_ratio": "16:9"}}`. |
+| Anthropic / Ollama | — | — | No image API; raise `ValidationError`. |
+| mlx-lm | — | — | No images endpoint; `image_generation` defaults off, raises `ValidationError`. |
 
-Calling `generate_image()` on a provider/model without generation support raises
-`ValidationError` before any network call.
+Calling `generate_image()` on a provider/model without support for the requested mode
+raises `ValidationError` before any network call.
 
 ### Error Handling
 
@@ -444,8 +465,8 @@ else:
 - `SystemPrompt`: System-level instructions
 - `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
 - `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
-- `ImageGenerationRequest`: Input for text-to-image generation (`prompt`, `model`, `n`, `size`, `quality`, `extra_body`)
-- `ImageGenerationResponse`: Output from image generation (`list[ImagePart]` + optional `revised_prompt`)
+- `ImageGenerationRequest`: Input for image generation/editing (`prompt`, `model`, `n`, `size`, `quality`, `extra_body`, plus img2img `image` and `mask`). `prompt` is required for text→image; when `image` is set it's optional (omit it for an OpenAI variation). Exposes `is_edit` / `is_variation` mode helpers.
+- `ImageGenerationResponse`: Output from image generation or editing (`list[ImagePart]` + optional `revised_prompt`)
 - `ToolSchema`: Definition of an available tool (function)
 - `ToolCall`: A tool invocation requested by the model
 - `Model`: Represents an available LLM model
