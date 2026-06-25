@@ -331,10 +331,10 @@ class ImageGenerationRequest:
 
 @dataclass
 class ImageGenerationResponse:
-    """Output of a text-to-image generation call.
+    """Output of an image generation or editing call.
 
-    Generated images are returned as :class:`ImagePart` (base64), symmetric with
-    image *input* so an image can be fed straight back into a chat ``Message``.
+    Images are returned as :class:`ImagePart` (base64), symmetric with image
+    *input* so a result can be fed straight back into a chat ``Message``.
     """
 
     images: list[ImagePart]

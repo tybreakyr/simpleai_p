@@ -466,7 +466,7 @@ else:
 - `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
 - `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
 - `ImageGenerationRequest`: Input for image generation/editing (`prompt`, `model`, `n`, `size`, `quality`, `extra_body`, plus img2img `image` and `mask`). `prompt` is required for text→image; when `image` is set it's optional (omit it for an OpenAI variation). Exposes `is_edit` / `is_variation` mode helpers.
-- `ImageGenerationResponse`: Output from image generation (`list[ImagePart]` + optional `revised_prompt`)
+- `ImageGenerationResponse`: Output from image generation or editing (`list[ImagePart]` + optional `revised_prompt`)
 - `ToolSchema`: Definition of an available tool (function)
 - `ToolCall`: A tool invocation requested by the model
 - `Model`: Represents an available LLM model
