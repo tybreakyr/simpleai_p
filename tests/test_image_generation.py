@@ -58,6 +58,43 @@ class TestImageGenerationModels(unittest.TestCase):
         with self.assertRaises(ValueError):
             ImageGenerationResponse(images=[])
 
+    def test_edit_request_image_plus_prompt(self):
+        req = ImageGenerationRequest(prompt="make it night", image=ImagePart(B64_IMAGE, "image/png"))
+        self.assertTrue(req.is_edit)
+        self.assertFalse(req.is_variation)
+
+    def test_variation_request_image_no_prompt(self):
+        req = ImageGenerationRequest(image=ImagePart(B64_IMAGE, "image/png"))
+        self.assertTrue(req.is_variation)
+        self.assertFalse(req.is_edit)
+
+    def test_no_image_no_prompt_raises(self):
+        with self.assertRaises(ValueError):
+            ImageGenerationRequest()
+
+    def test_mask_without_image_raises(self):
+        with self.assertRaises(ValueError):
+            ImageGenerationRequest(prompt="x", mask=ImagePart(B64_IMAGE, "image/png"))
+
+    def test_mask_without_prompt_raises(self):
+        with self.assertRaises(ValueError):
+            ImageGenerationRequest(
+                image=ImagePart(B64_IMAGE, "image/png"),
+                mask=ImagePart(B64_IMAGE, "image/png"),
+            )
+
+    def test_mask_with_image_and_prompt_ok(self):
+        req = ImageGenerationRequest(
+            prompt="replace the sky",
+            image=ImagePart(B64_IMAGE, "image/png"),
+            mask=ImagePart(B64_IMAGE, "image/png"),
+        )
+        self.assertTrue(req.is_edit)
+
+    def test_image_must_be_image_part(self):
+        with self.assertRaises(ValueError):
+            ImageGenerationRequest(prompt="x", image="not-an-image-part")
+
 
 # ----------------------------------------------------------------------------
 # Provider construction helpers
@@ -210,6 +247,99 @@ class TestOpenAIImageGeneration(unittest.TestCase):
 
 
 # ----------------------------------------------------------------------------
+# OpenAI img2img (edit / inpaint / variation)
+# ----------------------------------------------------------------------------
+
+
+class TestOpenAIImageEditing(unittest.TestCase):
+    def test_edit_routes_to_edit_endpoint(self):
+        provider = _openai_provider()
+        provider._client.images.edit.return_value = _openai_image_response()
+        resp = provider.generate_image(
+            ImageGenerationRequest(prompt="make it night", image=ImagePart(B64_IMAGE, "image/png"))
+        )
+        provider._client.images.generate.assert_not_called()
+        kwargs = provider._client.images.edit.call_args[1]
+        self.assertEqual(kwargs["model"], "gpt-image-1")
+        self.assertEqual(kwargs["prompt"], "make it night")
+        # image passed as a (name, bytes, mime) upload tuple
+        self.assertEqual(kwargs["image"][2], "image/png")
+        self.assertEqual(kwargs["image"][1], RAW_IMAGE)
+        self.assertNotIn("mask", kwargs)
+        self.assertEqual(resp.images[0].data, B64_IMAGE)
+
+    def test_inpaint_passes_mask(self):
+        provider = _openai_provider()
+        provider._client.images.edit.return_value = _openai_image_response()
+        provider.generate_image(
+            ImageGenerationRequest(
+                prompt="replace sky",
+                image=ImagePart(B64_IMAGE, "image/png"),
+                mask=ImagePart(B64_IMAGE, "image/png"),
+            )
+        )
+        kwargs = provider._client.images.edit.call_args[1]
+        self.assertEqual(kwargs["mask"][2], "image/png")
+
+    def test_edit_multiple_source_images(self):
+        provider = _openai_provider()
+        provider._client.images.edit.return_value = _openai_image_response()
+        provider.generate_image(
+            ImageGenerationRequest(
+                prompt="combine",
+                image=[ImagePart(B64_IMAGE, "image/png"), ImagePart(B64_IMAGE, "image/png")],
+            )
+        )
+        kwargs = provider._client.images.edit.call_args[1]
+        self.assertEqual(len(kwargs["image"]), 2)
+
+    def test_dalle_edit_forces_b64(self):
+        provider = _openai_provider(image_model="dall-e-2")
+        provider._client.images.edit.return_value = _openai_image_response()
+        provider.generate_image(
+            ImageGenerationRequest(prompt="x", image=ImagePart(B64_IMAGE, "image/png"))
+        )
+        kwargs = provider._client.images.edit.call_args[1]
+        self.assertEqual(kwargs["response_format"], "b64_json")
+
+    def test_variation_routes_to_variation_endpoint(self):
+        provider = _openai_provider()
+        provider._client.images.create_variation.return_value = _openai_image_response()
+        resp = provider.generate_image(
+            ImageGenerationRequest(image=ImagePart(B64_IMAGE, "image/png"), n=2)
+        )
+        provider._client.images.edit.assert_not_called()
+        kwargs = provider._client.images.create_variation.call_args[1]
+        self.assertEqual(kwargs["model"], "dall-e-2")
+        self.assertEqual(kwargs["n"], 2)
+        self.assertEqual(kwargs["response_format"], "b64_json")
+        self.assertNotIn("prompt", kwargs)
+        self.assertEqual(resp.images[0].data, B64_IMAGE)
+
+    def test_variation_rejects_multiple_images(self):
+        provider = _openai_provider()
+        with self.assertRaises(ValidationError):
+            provider.generate_image(
+                ImageGenerationRequest(
+                    image=[ImagePart(B64_IMAGE, "image/png"), ImagePart(B64_IMAGE, "image/png")]
+                )
+            )
+
+    def test_async_edit(self):
+        import asyncio
+
+        provider = _openai_provider()
+        provider._async_client = MagicMock()
+        provider._async_client.images.edit = AsyncMock(return_value=_openai_image_response())
+        resp = asyncio.run(
+            provider.agenerate_image(
+                ImageGenerationRequest(prompt="x", image=ImagePart(B64_IMAGE, "image/png"))
+            )
+        )
+        self.assertEqual(resp.images[0].data, B64_IMAGE)
+
+
+# ----------------------------------------------------------------------------
 # Gemini
 # ----------------------------------------------------------------------------
 
@@ -245,6 +375,56 @@ class TestGeminiImageGeneration(unittest.TestCase):
     def test_supports_image_generation(self):
         provider = _gemini_provider()
         self.assertTrue(provider.supported_features().image_generation)
+
+
+def _gemini_edit_response(raw=RAW_IMAGE, mime="image/png"):
+    part = MagicMock()
+    part.inline_data.data = raw
+    part.inline_data.mime_type = mime
+    cand = MagicMock()
+    cand.content.parts = [part]
+    resp = MagicMock()
+    resp.candidates = [cand]
+    return resp
+
+
+class TestGeminiImageEditing(unittest.TestCase):
+    def test_edit_uses_generate_content(self):
+        provider = _gemini_provider()
+        patcher, mock_genai = _gemini_genai_patch()
+        provider._client.models.generate_content.return_value = _gemini_edit_response()
+        with patcher:
+            resp = provider.generate_image(
+                ImageGenerationRequest(
+                    prompt="make it night", image=ImagePart(B64_IMAGE, "image/png")
+                )
+            )
+        provider._client.models.generate_images.assert_not_called()
+        call = provider._client.models.generate_content.call_args[1]
+        self.assertEqual(call["model"], "gemini-3.1-flash-image")
+        mock_genai.types.GenerateContentConfig.assert_called_once_with(
+            response_modalities=["TEXT", "IMAGE"]
+        )
+        self.assertEqual(resp.images[0].data, B64_IMAGE)
+        self.assertEqual(resp.images[0].media_type, "image/png")
+
+    def test_edit_mask_raises(self):
+        provider = _gemini_provider()
+        patcher, _ = _gemini_genai_patch()
+        with patcher, self.assertRaises(ValidationError):
+            provider.generate_image(
+                ImageGenerationRequest(
+                    prompt="x",
+                    image=ImagePart(B64_IMAGE, "image/png"),
+                    mask=ImagePart(B64_IMAGE, "image/png"),
+                )
+            )
+
+    def test_variation_without_prompt_raises(self):
+        provider = _gemini_provider()
+        patcher, _ = _gemini_genai_patch()
+        with patcher, self.assertRaises(ValidationError):
+            provider.generate_image(ImageGenerationRequest(image=ImagePart(B64_IMAGE, "image/png")))
 
 
 # ----------------------------------------------------------------------------

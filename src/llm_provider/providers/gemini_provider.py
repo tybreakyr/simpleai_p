@@ -27,6 +27,7 @@ from typing import Any, TypeVar
 
 from ..errors import (
     InvalidResponseError,
+    LLMError,
     RateLimitExceededError,
     ValidationError,
 )
@@ -461,22 +462,73 @@ class GeminiProvider(BaseProvider[T]):
         ]
         return ImageGenerationResponse(images=images, model=model)
 
+    def _assert_image_edit_supported(self, request: ImageGenerationRequest) -> None:
+        """Reject img2img requests Gemini's flash-image path can't honor.
+
+        Editing goes through ``generate_content`` (image+text→image), which has no
+        separate mask input and always needs a prompt.
+        """
+        if request.mask is not None:
+            raise ValidationError(
+                message="Gemini editing has no mask input; describe the region in the "
+                "prompt or use OpenAI for inpainting"
+            )
+        if not request.prompt:
+            raise ValidationError(message="Gemini image editing requires a prompt")
+
+    def _build_edit_call(self, request: ImageGenerationRequest, types: Any) -> dict[str, Any]:
+        """Build the ``generate_content`` kwargs for a flash-image edit."""
+        model = request.model or self._config.extra_settings.get(
+            "image_edit_model", "gemini-3.1-flash-image"
+        )
+        source = request.image if isinstance(request.image, list) else [request.image]
+        contents = self._content_to_parts([TextPart(request.prompt), *source], types)
+        cfg_kwargs: dict[str, Any] = {"response_modalities": ["TEXT", "IMAGE"]}
+        if request.extra_body:
+            cfg_kwargs.update(request.extra_body.get("gemini", {}))
+        return {
+            "model": model,
+            "contents": contents,
+            "config": types.GenerateContentConfig(**cfg_kwargs),
+        }
+
+    @staticmethod
+    def _parse_edit_response(response: Any, model: str) -> ImageGenerationResponse:
+        images = [
+            ImagePart.from_bytes(p.inline_data.data, p.inline_data.mime_type)
+            for cand in (response.candidates or [])
+            for p in (cand.content.parts or [])
+            if getattr(p, "inline_data", None) is not None
+        ]
+        if not images:
+            raise InvalidResponseError(
+                message="Gemini returned no image data for the edit request"
+            )
+        return ImageGenerationResponse(images=images, model=model)
+
     def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         self._assert_image_generation_support()
         from google.genai import types
 
         def _gen() -> ImageGenerationResponse:
             self._enforce_rate_limit()
-            model = request.model or self._config.extra_settings.get(
-                "image_model", "imagen-3.0-generate-002"
-            )
             try:
+                if request.image is not None:
+                    self._assert_image_edit_supported(request)
+                    call = self._build_edit_call(request, types)
+                    response = self._client.models.generate_content(**call)
+                    return self._parse_edit_response(response, call["model"])
+                model = request.model or self._config.extra_settings.get(
+                    "image_model", "imagen-3.0-generate-002"
+                )
                 response = self._client.models.generate_images(
                     model=model,
                     prompt=request.prompt,
                     config=self._build_imagen_config(request, types),
                 )
                 return self._parse_imagen_response(response, model)
+            except LLMError:
+                raise
             except Exception as e:
                 self._raise_gemini_error(e, "generate_image")
 
@@ -488,16 +540,23 @@ class GeminiProvider(BaseProvider[T]):
 
         async def _agen() -> ImageGenerationResponse:
             self._enforce_rate_limit()
-            model = request.model or self._config.extra_settings.get(
-                "image_model", "imagen-3.0-generate-002"
-            )
             try:
+                if request.image is not None:
+                    self._assert_image_edit_supported(request)
+                    call = self._build_edit_call(request, types)
+                    response = await self._client.aio.models.generate_content(**call)
+                    return self._parse_edit_response(response, call["model"])
+                model = request.model or self._config.extra_settings.get(
+                    "image_model", "imagen-3.0-generate-002"
+                )
                 response = await self._client.aio.models.generate_images(
                     model=model,
                     prompt=request.prompt,
                     config=self._build_imagen_config(request, types),
                 )
                 return self._parse_imagen_response(response, model)
+            except LLMError:
+                raise
             except Exception as e:
                 self._raise_gemini_error(e, "agenerate_image")
 
