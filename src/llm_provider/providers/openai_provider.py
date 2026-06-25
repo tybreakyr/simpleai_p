@@ -16,8 +16,9 @@ Supported features:
     - Temperature and top_p sampling
     - Function calling
     - Up to 128k token context window (model-dependent)
-    - Image generation, editing, inpainting, and variations
-      (images.generate / images.edit (+mask) / images.create_variation)
+    - Image generation (``images.generate``, default ``gpt-image-1``)
+    - Image editing / inpainting (``images.edit`` + optional mask)
+    - Image variations (``images.create_variation``, ``dall-e-2`` only)
 """
 
 from __future__ import annotations
