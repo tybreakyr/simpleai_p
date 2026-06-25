@@ -304,7 +304,9 @@ class ImageGenerationRequest:
                 raise ValueError("ImageGenerationRequest prompt must be a string")
             imgs = self.image if isinstance(self.image, list) else [self.image]
             if not imgs or not all(isinstance(p, ImagePart) for p in imgs):
-                raise ValueError("ImageGenerationRequest image must be an ImagePart or list of them")
+                raise ValueError(
+                    "ImageGenerationRequest image must be an ImagePart or list of them"
+                )
         if self.mask is not None:
             if not isinstance(self.mask, ImagePart):
                 raise ValueError("ImageGenerationRequest mask must be an ImagePart")

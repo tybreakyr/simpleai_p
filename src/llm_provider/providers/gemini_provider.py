@@ -501,9 +501,7 @@ class GeminiProvider(BaseProvider[T]):
             if getattr(p, "inline_data", None) is not None
         ]
         if not images:
-            raise InvalidResponseError(
-                message="Gemini returned no image data for the edit request"
-            )
+            raise InvalidResponseError(message="Gemini returned no image data for the edit request")
         return ImageGenerationResponse(images=images, model=model)
 
     def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:

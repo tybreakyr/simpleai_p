@@ -59,7 +59,9 @@ class TestImageGenerationModels(unittest.TestCase):
             ImageGenerationResponse(images=[])
 
     def test_edit_request_image_plus_prompt(self):
-        req = ImageGenerationRequest(prompt="make it night", image=ImagePart(B64_IMAGE, "image/png"))
+        req = ImageGenerationRequest(
+            prompt="make it night", image=ImagePart(B64_IMAGE, "image/png")
+        )
         self.assertTrue(req.is_edit)
         self.assertFalse(req.is_variation)
 
