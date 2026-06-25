@@ -16,6 +16,8 @@ Supported features:
     - Vision / multimodal (model-dependent)
     - Temperature and top_p sampling
     - Up to ~1M token context window (model-dependent)
+    - Image generation (Imagen, text→image via generate_images)
+    - Image editing (flash-image img2img; prompt required, no mask, no prompt-less variations)
 """
 
 from __future__ import annotations
@@ -501,7 +503,9 @@ class GeminiProvider(BaseProvider[T]):
             if getattr(p, "inline_data", None) is not None
         ]
         if not images:
-            raise InvalidResponseError(message="Gemini returned no image data for the edit request")
+            raise InvalidResponseError(
+                message="Gemini returned no image data for the edit request"
+            )
         return ImageGenerationResponse(images=images, model=model)
 
     def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
