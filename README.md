@@ -789,10 +789,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting (configured in `pyproject.toml`). Before opening a PR, run:
 
 ```bash
-pip install ruff
+pip install ruff==0.15.10
 ruff check .
 ruff format .
 ```
+
+CI pins this same version — installing unpinned `ruff` can pull in formatting changes (e.g. Markdown code block formatting added in 0.16) that CI doesn't yet apply, causing local and CI results to diverge.
 
 The CI workflow (`.github/workflows/ci.yml`) runs `ruff check` and `ruff format --check` automatically; PRs that fail the lint or format step will not be merged.
 
