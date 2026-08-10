@@ -92,7 +92,9 @@ class OllamaProvider(BaseProvider[T]):
                 raise ValidationError(
                     message="Ollama requires base64 image data; use ImagePart instead of ImageUrl"
                 )
-        message: dict[str, Any] = {"role": role, "content": "".join(text_segments)}
+        # Join with a newline: the segments were authored as separate parts (often
+        # split around an image), so concatenating them bare runs words together.
+        message: dict[str, Any] = {"role": role, "content": "\n".join(text_segments)}
         if images:
             message["images"] = images
         return message

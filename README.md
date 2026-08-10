@@ -360,7 +360,7 @@ from llm_provider import ImageGenerationRequest
 response = provider.generate_image(
     ImageGenerationRequest(prompt="a red bicycle on a beach", size="1024x1024", n=1)
 )
-image = response.images[0]          # an ImagePart (base64 PNG)
+image = response.images[0]          # an ImagePart (base64; MIME in image.media_type)
 
 # persist it
 import base64
@@ -397,7 +397,7 @@ provider.generate_image(ImageGenerationRequest(image=src))
 
 | Provider | Text→image | Edit / inpaint / variation | Notes |
 |----------|-----------|----------------------------|-------|
-| OpenAI | `images.generate` | `images.edit` (+`mask` for inpainting), `images.create_variation` (no prompt) | Default model `gpt-image-1`; set `extra_settings["image_model"]` to override (e.g. `"dall-e-3"`). Variations default to `dall-e-2` (`extra_settings["variation_model"]`). `size`/`quality` supported. |
+| OpenAI | `images.generate` | `images.edit` (+`mask` for inpainting), `images.create_variation` (no prompt) | Default model `gpt-image-1`; set `extra_settings["image_model"]` to override (e.g. `"dall-e-3"`). Variations default to `dall-e-2` (`extra_settings["variation_model"]`). `size`/`quality` supported (`quality` rejected with `ValidationError` for `dall-e-2`). |
 | Gemini | Imagen (`generate_images`) | flash image (`generate_content`, image+text→image) | Generation default `imagen-3.0-generate-002`; edit default `gemini-3.1-flash-image` (override via `extra_settings["image_edit_model"]`). **No mask input** — a `mask` raises `ValidationError`; variations (no prompt) are unsupported. Imagen sizes via `extra_body={"gemini": {"aspect_ratio": "16:9"}}`. |
 | Anthropic / Ollama | — | — | No image API; raise `ValidationError`. |
 | mlx-lm | — | — | No images endpoint; `image_generation` defaults off, raises `ValidationError`. |
@@ -789,10 +789,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting (configured in `pyproject.toml`). Before opening a PR, run:
 
 ```bash
-pip install ruff
+pip install ruff==0.15.10
 ruff check .
 ruff format .
 ```
+
+CI pins this same version — installing unpinned `ruff` can pull in formatting changes (e.g. Markdown code block formatting added in 0.16) that CI doesn't yet apply, causing local and CI results to diverge.
 
 The CI workflow (`.github/workflows/ci.yml`) runs `ruff check` and `ruff format --check` automatically; PRs that fail the lint or format step will not be merged.
 

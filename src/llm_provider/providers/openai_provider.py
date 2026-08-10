@@ -55,6 +55,14 @@ from .base_provider import BaseProvider
 
 T = TypeVar("T")
 
+# gpt-image-1 output_format values -> MIME type of the returned bytes.
+_IMAGE_MEDIA_TYPES = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
+}
+
 
 class OpenAIProvider(BaseProvider[T]):
     """
@@ -303,12 +311,24 @@ class OpenAIProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
+    @staticmethod
+    def _assert_quality_supported(model: str, operation: str) -> None:
+        """dall-e-2 rejects ``quality`` on both generate and edit; fail locally."""
+        if model.startswith("dall-e-2"):
+            raise ValidationError(
+                message=(
+                    f"Model '{model}' does not accept 'quality' for image {operation}; "
+                    "omit it or use gpt-image-1"
+                )
+            )
+
     def _build_image_kwargs(self, request: ImageGenerationRequest) -> dict[str, Any]:
         model = request.model or self._config.extra_settings.get("image_model", "gpt-image-1")
         kwargs: dict[str, Any] = {"model": model, "prompt": request.prompt, "n": request.n}
         if request.size:
             kwargs["size"] = request.size
         if request.quality:
+            self._assert_quality_supported(model, "generation")
             kwargs["quality"] = request.quality
         # gpt-image-1 returns b64_json by default and rejects response_format;
         # dall-e-* default to URL output, so force b64_json there.
@@ -342,6 +362,7 @@ class OpenAIProvider(BaseProvider[T]):
         if request.size:
             kwargs["size"] = request.size
         if request.quality:
+            self._assert_quality_supported(model, "editing")
             kwargs["quality"] = request.quality
         if model.startswith("dall-e"):
             kwargs["response_format"] = "b64_json"
@@ -356,6 +377,10 @@ class OpenAIProvider(BaseProvider[T]):
                 message="Image variations accept a single source image, not a list"
             )
         model = request.model or self._config.extra_settings.get("variation_model", "dall-e-2")
+        # Variations are dall-e-2 only, so quality is rejected here for the same
+        # reason as on generate/edit — raise rather than silently drop it.
+        if request.quality:
+            self._assert_quality_supported(model, "variations")
         kwargs: dict[str, Any] = {
             "model": model,
             "image": self._image_part_to_file(request.image),
@@ -369,8 +394,30 @@ class OpenAIProvider(BaseProvider[T]):
         return kwargs
 
     @staticmethod
-    def _parse_image_response(response: Any, model: str) -> ImageGenerationResponse:
-        images = [ImagePart(data=d.b64_json, media_type="image/png") for d in response.data]
+    def _resolve_media_type(response: Any, kwargs: dict[str, Any]) -> str:
+        """Determine the MIME of returned image bytes.
+
+        gpt-image-1 honours ``output_format`` (png/jpeg/webp), passed through
+        ``extra_body["openai"]``, so the bytes are not always PNG. Prefer what
+        the response reports, fall back to what was requested, then to PNG.
+
+        An *unrecognised* format derives ``image/<fmt>`` rather than defaulting
+        to PNG: a format OpenAI adds later would otherwise be mislabelled as
+        PNG, which is the contradiction this resolution exists to avoid. Only
+        the absence of any format falls back to PNG.
+        """
+        fmt = getattr(response, "output_format", None) or kwargs.get("output_format")
+        if not fmt:
+            return "image/png"
+        fmt = str(fmt).lower().lstrip(".")
+        return _IMAGE_MEDIA_TYPES.get(fmt, f"image/{fmt}")
+
+    @staticmethod
+    def _parse_image_response(
+        response: Any, model: str, kwargs: dict[str, Any] | None = None
+    ) -> ImageGenerationResponse:
+        media_type = OpenAIProvider._resolve_media_type(response, kwargs or {})
+        images = [ImagePart(data=d.b64_json, media_type=media_type) for d in response.data]
         revised = getattr(response.data[0], "revised_prompt", None) if response.data else None
         return ImageGenerationResponse(images=images, model=model, revised_prompt=revised)
 
@@ -388,7 +435,7 @@ class OpenAIProvider(BaseProvider[T]):
                 else:
                     kwargs = self._build_edit_kwargs(request)
                     response = self._client.images.edit(**kwargs)
-                return self._parse_image_response(response, kwargs["model"])
+                return self._parse_image_response(response, kwargs["model"], kwargs)
             except LLMError:
                 raise
             except Exception as e:
@@ -420,7 +467,7 @@ class OpenAIProvider(BaseProvider[T]):
                 else:
                     kwargs = self._build_edit_kwargs(request)
                     response = await self._async_client.images.edit(**kwargs)
-                return self._parse_image_response(response, kwargs["model"])
+                return self._parse_image_response(response, kwargs["model"], kwargs)
             except LLMError:
                 raise
             except Exception as e:

@@ -5,10 +5,16 @@ Unit tests for the Gemini provider implementation.
 import sys
 import threading
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from llm_provider.errors import RateLimitExceededError
-from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
+from llm_provider.models import (
+    ChatRequest,
+    ImageGenerationRequest,
+    Message,
+    ProviderConfig,
+    SystemPrompt,
+)
 from llm_provider.retry import RetryConfig
 
 
@@ -139,6 +145,43 @@ class TestGeminiProviderChat(unittest.TestCase):
         with self.assertRaises(RateLimitExceededError) as ctx:
             self.provider.chat(request)
         self.assertFalse(ctx.exception.retryable)
+
+    def test_quota_message_is_identical_across_operations(self):
+        """Chat, achat and the image path share one 429 mapping (issue #19)."""
+        import asyncio
+
+        request = ChatRequest(messages=[Message(role="user", content="Hi")])
+        image_request = ImageGenerationRequest(prompt="a cat")
+
+        def _collect(fn):
+            with self.assertRaises(RateLimitExceededError) as ctx:
+                fn()
+            return ctx.exception.message, ctx.exception.retryable
+
+        for error_str in (
+            "429 RESOURCE_EXHAUSTED PerDay quota exceeded",
+            "429 RESOURCE_EXHAUSTED retryDelay: '5s'",
+        ):
+            self.provider._client.models.generate_content.side_effect = Exception(error_str)
+            self.provider._client.aio = MagicMock()
+            self.provider._client.aio.models.generate_content = AsyncMock(
+                side_effect=Exception(error_str)
+            )
+            self.provider._client.models.generate_images.side_effect = Exception(error_str)
+
+            results = [
+                _collect(lambda: self.provider.chat(request)),
+                _collect(lambda: asyncio.run(self.provider.achat(request))),
+                _collect(lambda: self.provider.generate_image(image_request)),
+            ]
+            messages = [m for m, _ in results]
+            retryables = [r for _, r in results]
+
+            self.assertEqual(
+                len(set(messages)), 1, f"divergent messages for {error_str}: {messages}"
+            )
+            self.assertEqual(len(set(retryables)), 1)
+            self.assertNotIn("upgrading to a paid tier", messages[0])
 
     def test_chat_uses_request_model(self):
         self.provider._client.models.generate_content.return_value = self._mock_response()

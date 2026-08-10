@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any, TypeVar
+from typing import Any, NoReturn, TypeVar
 
 from ..errors import (
     InvalidResponseError,
@@ -365,25 +365,7 @@ class GeminiProvider(BaseProvider[T]):
                 )
                 return self._parse_response(response, request)
             except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    daily = _is_daily_quota(error_str)
-                    retry_after = None if daily else _parse_gemini_retry_delay(error_str)
-                    raise RateLimitExceededError(
-                        message=(
-                            "Gemini daily quota exhausted — will not retry until quota resets. "
-                            "Consider upgrading to a paid tier or reducing pipeline frequency."
-                            if daily
-                            else f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s."
-                            if retry_after
-                            else "Gemini rate limit exceeded."
-                        ),
-                        operation="chat",
-                        cause=e,
-                        retry_after=retry_after,
-                        retryable=not daily,
-                    ) from e
-                self._classify_and_raise_error(e, "chat")
+                self._raise_gemini_error(e, "chat")
 
         return self._maybe_renest_tool_calls(self._execute_with_retry(_chat, "chat"), _flat_map)
 
@@ -402,32 +384,13 @@ class GeminiProvider(BaseProvider[T]):
                 )
                 return self._parse_response(response, request)
             except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    daily = _is_daily_quota(error_str)
-                    retry_after = None if daily else _parse_gemini_retry_delay(error_str)
-                    from ..errors import RateLimitExceededError
-
-                    raise RateLimitExceededError(
-                        message=(
-                            "Gemini daily quota exhausted — will not retry until quota resets. "
-                            if daily
-                            else f"Gemini rate limit exceeded. Retry after {retry_after:.0f}s."
-                            if retry_after
-                            else "Gemini rate limit exceeded."
-                        ),
-                        operation="achat",
-                        cause=e,
-                        retry_after=retry_after,
-                        retryable=not daily,
-                    ) from e
-                self._classify_and_raise_error(e, "achat")
+                self._raise_gemini_error(e, "achat")
 
         return self._maybe_renest_tool_calls(
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
-    def _raise_gemini_error(self, e: Exception, operation: str) -> None:
+    def _raise_gemini_error(self, e: Exception, operation: str) -> NoReturn:
         """Map a Gemini SDK exception to an LLMError (429-aware), then raise."""
         error_str = str(e)
         if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:

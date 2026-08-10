@@ -15,7 +15,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned ruff changes the formatter under us and fails
+        # unrelated PRs. 0.16 began formatting Python inside Markdown blocks,
+        # which the docs have not been through yet. Bump deliberately.
+        run: pip install ruff==0.15.10
       - name: Lint
         run: ruff check .
       - name: Format check

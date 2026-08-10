@@ -172,12 +172,14 @@ def _anthropic_provider():
         return provider
 
 
-def _openai_image_response(b64=B64_IMAGE, revised=None):
+def _openai_image_response(b64=B64_IMAGE, revised=None, output_format=None):
     datum = MagicMock()
     datum.b64_json = b64
     datum.revised_prompt = revised
     resp = MagicMock()
     resp.data = [datum]
+    # Explicit so the attribute isn't an auto-created (truthy) MagicMock.
+    resp.output_format = output_format
     return resp
 
 
@@ -215,6 +217,76 @@ class TestOpenAIImageGeneration(unittest.TestCase):
         self.assertIsInstance(resp.images[0], ImagePart)
         self.assertEqual(resp.images[0].data, B64_IMAGE)
         self.assertEqual(resp.images[0].media_type, "image/png")
+
+    def test_media_type_follows_response_output_format(self):
+        provider = _openai_provider()
+        provider._client.images.generate.return_value = _openai_image_response(output_format="jpeg")
+        resp = provider.generate_image(ImageGenerationRequest(prompt="a cat"))
+        self.assertEqual(resp.images[0].media_type, "image/jpeg")
+
+    def test_media_type_falls_back_to_requested_output_format(self):
+        provider = _openai_provider()
+        provider._client.images.generate.return_value = _openai_image_response()
+        resp = provider.generate_image(
+            ImageGenerationRequest(prompt="a cat", extra_body={"openai": {"output_format": "webp"}})
+        )
+        self.assertEqual(resp.images[0].media_type, "image/webp")
+
+    def test_media_type_defaults_to_png(self):
+        provider = _openai_provider()
+        provider._client.images.generate.return_value = _openai_image_response()
+        resp = provider.generate_image(ImageGenerationRequest(prompt="a cat"))
+        self.assertEqual(resp.images[0].media_type, "image/png")
+
+    def test_media_type_derives_unrecognised_format(self):
+        """An unmapped format must not be mislabelled as PNG."""
+        provider = _openai_provider()
+        provider._client.images.generate.return_value = _openai_image_response(output_format="avif")
+        resp = provider.generate_image(ImageGenerationRequest(prompt="a cat"))
+        self.assertEqual(resp.images[0].media_type, "image/avif")
+
+    def test_dalle_2_rejects_quality_on_variation(self):
+        provider = _openai_provider()
+        with self.assertRaises(ValidationError) as ctx:
+            provider.generate_image(
+                ImageGenerationRequest(image=ImagePart(B64_IMAGE, "image/png"), quality="hd")
+            )
+        self.assertIn("dall-e-2", str(ctx.exception))
+        provider._client.images.create_variation.assert_not_called()
+
+    def test_dalle_2_rejects_quality_on_generate(self):
+        provider = _openai_provider(image_model="dall-e-2")
+        with self.assertRaises(ValidationError) as ctx:
+            provider.generate_image(ImageGenerationRequest(prompt="a cat", quality="hd"))
+        self.assertIn("dall-e-2", str(ctx.exception))
+        provider._client.images.generate.assert_not_called()
+
+    def test_dalle_2_rejects_quality_on_edit(self):
+        provider = _openai_provider(image_model="dall-e-2")
+        with self.assertRaises(ValidationError) as ctx:
+            provider.generate_image(
+                ImageGenerationRequest(
+                    prompt="x", image=ImagePart(B64_IMAGE, "image/png"), quality="hd"
+                )
+            )
+        self.assertIn("dall-e-2", str(ctx.exception))
+        provider._client.images.edit.assert_not_called()
+
+    def test_dalle_3_still_accepts_quality(self):
+        provider = _openai_provider(image_model="dall-e-3")
+        provider._client.images.generate.return_value = _openai_image_response()
+        provider.generate_image(ImageGenerationRequest(prompt="a cat", quality="hd"))
+        self.assertEqual(provider._client.images.generate.call_args[1]["quality"], "hd")
+
+    def test_gpt_image_1_edit_forwards_quality(self):
+        provider = _openai_provider()
+        provider._client.images.edit.return_value = _openai_image_response()
+        provider.generate_image(
+            ImageGenerationRequest(
+                prompt="x", image=ImagePart(B64_IMAGE, "image/png"), quality="high"
+            )
+        )
+        self.assertEqual(provider._client.images.edit.call_args[1]["quality"], "high")
 
     def test_extra_body_and_quality_flow_through(self):
         provider = _openai_provider()

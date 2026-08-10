@@ -275,14 +275,27 @@ class TestOllamaImageTranslation(unittest.TestCase):
         provider = _ollama_provider(vision=True)
         msg = Message(
             role="user",
-            content=[TextPart("hi "), TextPart("there"), ImagePart(B64_IMAGE, "image/png")],
+            content=[TextPart("hi"), TextPart("there"), ImagePart(B64_IMAGE, "image/png")],
         )
         payload = provider._build_payload(ChatRequest(messages=[msg]))
         # last appended message is the user turn
         user_msg = payload["messages"][-1]
         self.assertEqual(user_msg["role"], "user")
-        self.assertEqual(user_msg["content"], "hi there")
+        self.assertEqual(user_msg["content"], "hi\nthere")
         self.assertEqual(user_msg["images"], [B64_IMAGE])
+
+    def test_text_split_around_image_keeps_a_separator(self):
+        provider = _ollama_provider(vision=True)
+        msg = Message(
+            role="user",
+            content=[
+                TextPart("Describe this image."),
+                ImagePart(B64_IMAGE, "image/png"),
+                TextPart("Be concise."),
+            ],
+        )
+        payload = provider._build_payload(ChatRequest(messages=[msg]))
+        self.assertEqual(payload["messages"][-1]["content"], "Describe this image.\nBe concise.")
 
     def test_image_url_raises(self):
         provider = _ollama_provider(vision=True)
