@@ -65,6 +65,9 @@ extend-ignore = ["E501", "ANN401", "ANN001", "ANN002", "ANN003", "ANN201", "ANN2
 "tests/**" = ["F841", "N806", "ANN206"]
 
 [tool.pytest.ini_options]
+# Test the checkout we're running from, not whatever an editable install
+# happens to point at — a single global .pth can only name one worktree.
+pythonpath = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
