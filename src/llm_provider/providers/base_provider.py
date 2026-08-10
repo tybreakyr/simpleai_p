@@ -7,7 +7,7 @@ import dataclasses
 import json
 from abc import ABC
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, NoReturn, TypeVar
 
 from ..errors import (
     ConnectionFailedError,
@@ -227,7 +227,7 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
 
     def _classify_and_raise_error(
         self, error: Exception, operation_name: str, status_code: int | None = None
-    ) -> None:
+    ) -> NoReturn:
         """
         Classify an error and raise appropriate LLMError.
 

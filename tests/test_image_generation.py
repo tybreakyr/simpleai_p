@@ -238,6 +238,22 @@ class TestOpenAIImageGeneration(unittest.TestCase):
         resp = provider.generate_image(ImageGenerationRequest(prompt="a cat"))
         self.assertEqual(resp.images[0].media_type, "image/png")
 
+    def test_media_type_derives_unrecognised_format(self):
+        """An unmapped format must not be mislabelled as PNG."""
+        provider = _openai_provider()
+        provider._client.images.generate.return_value = _openai_image_response(output_format="avif")
+        resp = provider.generate_image(ImageGenerationRequest(prompt="a cat"))
+        self.assertEqual(resp.images[0].media_type, "image/avif")
+
+    def test_dalle_2_rejects_quality_on_variation(self):
+        provider = _openai_provider()
+        with self.assertRaises(ValidationError) as ctx:
+            provider.generate_image(
+                ImageGenerationRequest(image=ImagePart(B64_IMAGE, "image/png"), quality="hd")
+            )
+        self.assertIn("dall-e-2", str(ctx.exception))
+        provider._client.images.create_variation.assert_not_called()
+
     def test_dalle_2_rejects_quality_on_generate(self):
         provider = _openai_provider(image_model="dall-e-2")
         with self.assertRaises(ValidationError) as ctx:

@@ -377,6 +377,10 @@ class OpenAIProvider(BaseProvider[T]):
                 message="Image variations accept a single source image, not a list"
             )
         model = request.model or self._config.extra_settings.get("variation_model", "dall-e-2")
+        # Variations are dall-e-2 only, so quality is rejected here for the same
+        # reason as on generate/edit — raise rather than silently drop it.
+        if request.quality:
+            self._assert_quality_supported(model, "variations")
         kwargs: dict[str, Any] = {
             "model": model,
             "image": self._image_part_to_file(request.image),
@@ -396,9 +400,17 @@ class OpenAIProvider(BaseProvider[T]):
         gpt-image-1 honours ``output_format`` (png/jpeg/webp), passed through
         ``extra_body["openai"]``, so the bytes are not always PNG. Prefer what
         the response reports, fall back to what was requested, then to PNG.
+
+        An *unrecognised* format derives ``image/<fmt>`` rather than defaulting
+        to PNG: a format OpenAI adds later would otherwise be mislabelled as
+        PNG, which is the contradiction this resolution exists to avoid. Only
+        the absence of any format falls back to PNG.
         """
         fmt = getattr(response, "output_format", None) or kwargs.get("output_format")
-        return _IMAGE_MEDIA_TYPES.get(str(fmt).lower(), "image/png") if fmt else "image/png"
+        if not fmt:
+            return "image/png"
+        fmt = str(fmt).lower().lstrip(".")
+        return _IMAGE_MEDIA_TYPES.get(fmt, f"image/{fmt}")
 
     @staticmethod
     def _parse_image_response(

@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any, TypeVar
+from typing import Any, NoReturn, TypeVar
 
 from ..errors import (
     InvalidResponseError,
@@ -390,7 +390,7 @@ class GeminiProvider(BaseProvider[T]):
             await self._arun_with_limit(_achat, "achat"), _flat_map
         )
 
-    def _raise_gemini_error(self, e: Exception, operation: str) -> None:
+    def _raise_gemini_error(self, e: Exception, operation: str) -> NoReturn:
         """Map a Gemini SDK exception to an LLMError (429-aware), then raise."""
         error_str = str(e)
         if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
