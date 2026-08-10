@@ -31,6 +31,7 @@ dependencies = [
 dev = [
     "pytest>=9.0.0",
     "pytest-cov>=7.0.0",
+    "ruff==0.16.2",
 ]
 gemini = [
     "google-genai>=1.73.0",
