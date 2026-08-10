@@ -45,19 +45,25 @@ from llm_provider import (
     create_openai_provider,
     create_gemini_provider,
     create_ollama_provider,
-
     # Factory
-    ProviderFactory, FactoryConfig,
-
+    ProviderFactory,
+    FactoryConfig,
     # Data models
-    ProviderConfig, ChatRequest, ChatResponse,
-    Message, SystemPrompt,
-    ToolSchema, ToolCall,
-
+    ProviderConfig,
+    ChatRequest,
+    ChatResponse,
+    Message,
+    SystemPrompt,
+    ToolSchema,
+    ToolCall,
     # Error types
-    LLMError, ConnectionFailedError, TimeoutError,
-    RateLimitExceededError, ModelNotAvailableError,
-    JSONParseFailedError, InvalidConfigurationError,
+    LLMError,
+    ConnectionFailedError,
+    TimeoutError,
+    RateLimitExceededError,
+    ModelNotAvailableError,
+    JSONParseFailedError,
+    InvalidConfigurationError,
     is_retryable,
 )
 ```
@@ -69,13 +75,15 @@ Use when you only need one provider or want minimal setup.
 ```python
 from llm_provider import create_anthropic_provider, ChatRequest, Message
 
-provider = create_anthropic_provider({
-    "api_key": "sk-ant-...",
-    "default_model": "claude-sonnet-4-6",
-    "host": "https://api.anthropic.com",
-    "timeout": 60.0,
-    "retry_attempts": 3,
-})
+provider = create_anthropic_provider(
+    {
+        "api_key": "sk-ant-...",
+        "default_model": "claude-sonnet-4-6",
+        "host": "https://api.anthropic.com",
+        "timeout": 60.0,
+        "retry_attempts": 3,
+    }
+)
 
 request = ChatRequest(
     messages=[Message(role="user", content="Explain async/await in Python.")],
@@ -93,32 +101,38 @@ Use when managing multiple providers or swapping at runtime.
 
 ```python
 from llm_provider import (
-    ProviderFactory, FactoryConfig, ProviderConfig,
-    create_anthropic_provider, create_openai_provider,
-    ChatRequest, Message,
+    ProviderFactory,
+    FactoryConfig,
+    ProviderConfig,
+    create_anthropic_provider,
+    create_openai_provider,
+    ChatRequest,
+    Message,
 )
 
 factory = ProviderFactory()
 factory.register_provider("anthropic", create_anthropic_provider)
 factory.register_provider("openai", create_openai_provider)
 
-factory.load_config(FactoryConfig(
-    default_provider="anthropic",
-    provider_configs={
-        "anthropic": ProviderConfig(
-            host="https://api.anthropic.com",
-            default_model="claude-sonnet-4-6",
-            api_key="sk-ant-...",
-            timeout=60.0,
-        ),
-        "openai": ProviderConfig(
-            host="https://api.openai.com",
-            default_model="gpt-4o",
-            api_key="sk-...",
-            timeout=60.0,
-        ),
-    },
-))
+factory.load_config(
+    FactoryConfig(
+        default_provider="anthropic",
+        provider_configs={
+            "anthropic": ProviderConfig(
+                host="https://api.anthropic.com",
+                default_model="claude-sonnet-4-6",
+                api_key="sk-ant-...",
+                timeout=60.0,
+            ),
+            "openai": ProviderConfig(
+                host="https://api.openai.com",
+                default_model="gpt-4o",
+                api_key="sk-...",
+                timeout=60.0,
+            ),
+        },
+    )
+)
 
 provider = factory.get_default_provider()
 openai_provider = factory.create_provider_by_name("openai")
@@ -162,16 +176,20 @@ Valid roles: `"user"` and `"assistant"`. Prefer `SystemPrompt` over a
 import asyncio
 from llm_provider import create_anthropic_provider, ChatRequest, Message
 
-provider = create_anthropic_provider({
-    "api_key": "sk-ant-...",
-    "default_model": "claude-sonnet-4-6",
-    "host": "https://api.anthropic.com",
-})
+provider = create_anthropic_provider(
+    {
+        "api_key": "sk-ant-...",
+        "default_model": "claude-sonnet-4-6",
+        "host": "https://api.anthropic.com",
+    }
+)
+
 
 async def main():
     request = ChatRequest(messages=[Message(role="user", content="Hello!")])
     response = await provider.achat(request)
     print(response.message)
+
 
 asyncio.run(main())
 ```
@@ -181,8 +199,7 @@ Concurrent requests:
 ```python
 async def batch(provider, prompts):
     tasks = [
-        provider.achat(ChatRequest(messages=[Message(role="user", content=p)]))
-        for p in prompts
+        provider.achat(ChatRequest(messages=[Message(role="user", content=p)])) for p in prompts
     ]
     responses = await asyncio.gather(*tasks)
     return [r.message for r in responses]
@@ -197,17 +214,21 @@ from dataclasses import dataclass
 from typing import Optional
 from llm_provider import ChatRequest, Message
 
+
 @dataclass
 class ExtractedPerson:
     name: str
     age: int
     email: Optional[str] = None
 
+
 request = ChatRequest(
-    messages=[Message(
-        role="user",
-        content="Extract into JSON: John Doe, 34, john@example.com",
-    )],
+    messages=[
+        Message(
+            role="user",
+            content="Extract into JSON: John Doe, 34, john@example.com",
+        )
+    ],
     structured_output_type=ExtractedPerson,
 )
 response = provider.chat(request)
@@ -252,9 +273,9 @@ response = provider.chat(request)
 
 if response.tool_calls:
     for call in response.tool_calls:
-        print(call.name)       # "get_weather"
+        print(call.name)  # "get_weather"
         print(call.arguments)  # {"city": "Tokyo"}
-        print(call.id)         # provider-generated call ID
+        print(call.id)  # provider-generated call ID
 ```
 
 `tool_choice` across providers:
@@ -291,7 +312,7 @@ print(final.message)
 ```python
 request = ChatRequest(
     messages=[Message(role="user", content="Write a haiku about autumn.")],
-    temperature=0.9,   # 0.0 = deterministic, higher = more random
+    temperature=0.9,  # 0.0 = deterministic, higher = more random
     top_p=0.95,
 )
 ```
@@ -305,7 +326,7 @@ Both are `Optional[float]`; omit to use provider defaults.
 ```python
 ProviderConfig(
     host="https://api.anthropic.com",
-    default_model="claude-sonnet-4-6",   # or "claude-opus-4-7"
+    default_model="claude-sonnet-4-6",  # or "claude-opus-4-7"
     api_key="sk-ant-...",
     timeout=60.0,
     retry_attempts=3,
@@ -336,8 +357,8 @@ ProviderConfig(
 ```python
 ProviderConfig(
     host="https://generativelanguage.googleapis.com",
-    default_model="gemini-2.0-flash",   # or "gemini-1.5-pro"
-    api_key="AIza...",                  # from aistudio.google.com
+    default_model="gemini-2.0-flash",  # or "gemini-1.5-pro"
+    api_key="AIza...",  # from aistudio.google.com
     timeout=60.0,
     retry_attempts=3,
     rate_limit=15,  # requests-per-minute; set this on the free tier to avoid 429s
@@ -350,10 +371,10 @@ ProviderConfig(
 ProviderConfig(
     host="http://localhost:11434",
     default_model="llama3.1:latest",  # must be pulled: `ollama pull llama3.1`
-    timeout=120.0,                    # first load can be slow
+    timeout=120.0,  # first load can be slow
     retry_attempts=3,
     extra_settings={
-        "think": False,       # disable CoT on thinking models (e.g., Qwen3)
+        "think": False,  # disable CoT on thinking models (e.g., Qwen3)
         "keep_alive": "10m",  # keep model in VRAM between requests
     },
 )
@@ -365,9 +386,13 @@ ProviderConfig(
 
 ```python
 from llm_provider import (
-    LLMError, ConnectionFailedError, TimeoutError,
-    RateLimitExceededError, ModelNotAvailableError,
-    JSONParseFailedError, InvalidConfigurationError,
+    LLMError,
+    ConnectionFailedError,
+    TimeoutError,
+    RateLimitExceededError,
+    ModelNotAvailableError,
+    JSONParseFailedError,
+    InvalidConfigurationError,
 )
 
 try:

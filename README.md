@@ -43,8 +43,12 @@ pip install -e ".[all]"        # All providers
 
 ```python
 from llm_provider import (
-    ProviderFactory, FactoryConfig, ProviderConfig,
-    ChatRequest, Message, create_ollama_provider
+    ProviderFactory,
+    FactoryConfig,
+    ProviderConfig,
+    ChatRequest,
+    Message,
+    create_ollama_provider,
 )
 
 # Create factory
@@ -54,18 +58,11 @@ factory = ProviderFactory()
 factory.register_provider("ollama", create_ollama_provider)
 
 # Create provider configuration
-ollama_config = ProviderConfig(
-    host="http://localhost:11434",
-    default_model="llama2",
-    timeout=30.0
-)
+ollama_config = ProviderConfig(host="http://localhost:11434", default_model="llama2", timeout=30.0)
 
 # Create factory configuration
 factory_config = FactoryConfig(
-    default_provider="ollama",
-    provider_configs={
-        "ollama": ollama_config
-    }
+    default_provider="ollama", provider_configs={"ollama": ollama_config}
 )
 
 # Load configuration
@@ -75,11 +72,7 @@ factory.load_config(factory_config)
 provider = factory.get_default_provider()
 
 # Create chat request
-request = ChatRequest(
-    messages=[
-        Message(role="user", content="Hello, how are you?")
-    ]
-)
+request = ChatRequest(messages=[Message(role="user", content="Hello, how are you?")])
 
 # Send request
 response = provider.chat(request)
@@ -94,10 +87,12 @@ All providers support an asynchronous interface (`achat`) for concurrent applica
 import asyncio
 from llm_provider import ChatRequest, Message
 
+
 async def fetch_chat():
     request = ChatRequest(messages=[Message(role="user", content="Hello!")])
     response = await provider.achat(request)
     print(response.message)
+
 
 asyncio.run(fetch_chat())
 ```
@@ -108,18 +103,20 @@ asyncio.run(fetch_chat())
 from dataclasses import dataclass
 from typing import Optional
 
+
 @dataclass
 class Person:
     name: str
     age: int
     email: Optional[str] = None
 
+
 # Create request with structured output type
 request = ChatRequest(
     messages=[
         Message(role="user", content="Extract person info from: John Doe, 30, john@example.com")
     ],
-    structured_output_type=Person
+    structured_output_type=Person,
 )
 
 # Send request
@@ -151,11 +148,11 @@ schema = {
 }
 request = ChatRequest(
     messages=[Message(role="user", content="Extract: John Doe, 30")],
-    response_schema=schema,          # mutually exclusive with `tools`
+    response_schema=schema,  # mutually exclusive with `tools`
     temperature=0.0,
 )
 response = provider.chat(request)
-person: dict = response.structured_data   # {"name": "John Doe", "age": 30}
+person: dict = response.structured_data  # {"name": "John Doe", "age": 30}
 ```
 
 If the model returns text that can't be decoded to JSON, a retryable
@@ -187,14 +184,14 @@ tools = [
     ToolSchema(
         name="get_weather",
         description="Get current weather",
-        input_schema={"type": "object", "properties": {"location": {"type": "string"}}}
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}}},
     )
 ]
 
 request = ChatRequest(
     messages=[Message(role="user", content="What's the weather in London?")],
     tools=tools,
-    tool_choice="auto"
+    tool_choice="auto",
 )
 
 response = provider.chat(request)
@@ -237,8 +234,8 @@ automatically based on a small **per-model capability registry**:
 ```python
 from llm_provider import supports_nested_tool_params
 
-supports_nested_tool_params("gpt-4o")                            # True  → schema sent as-is
-supports_nested_tool_params("mlx-community/Qwen3.5-9B-MLX-4bit") # False → auto-flattened
+supports_nested_tool_params("gpt-4o")  # True  → schema sent as-is
+supports_nested_tool_params("mlx-community/Qwen3.5-9B-MLX-4bit")  # False → auto-flattened
 ```
 
 Override the decision per provider with
@@ -268,7 +265,9 @@ response = provider.chat(ChatRequest(messages=messages, tools=tools, tool_choice
 if response.tool_calls:
     call = response.tool_calls[0]
     # 1. Record the model's tool-call turn verbatim.
-    messages.append(Message(role="assistant", content=response.message, tool_calls=response.tool_calls))
+    messages.append(
+        Message(role="assistant", content=response.message, tool_calls=response.tool_calls)
+    )
     # 2. Execute the tool and feed the result back.
     result = get_weather(**call.arguments)  # your function
     messages.append(Message(role="tool", content=str(result), tool_call_id=call.id, name=call.name))
@@ -291,9 +290,9 @@ request = ChatRequest(
     messages=[Message(role="user", content="Tell me a story.")],
     extra_body={
         "anthropic": {"top_k": 40},
-        "openai":    {"seed": 42},
-        "gemini":    {},
-        "ollama":    {"keep_alive": "10m"},
+        "openai": {"seed": 42},
+        "gemini": {},
+        "ollama": {"keep_alive": "10m"},
     },
 )
 ```
@@ -360,15 +359,17 @@ from llm_provider import ImageGenerationRequest
 response = provider.generate_image(
     ImageGenerationRequest(prompt="a red bicycle on a beach", size="1024x1024", n=1)
 )
-image = response.images[0]          # an ImagePart (base64; MIME in image.media_type)
+image = response.images[0]  # an ImagePart (base64; MIME in image.media_type)
 
 # persist it
 import base64
+
 with open("bike.png", "wb") as f:
     f.write(base64.b64decode(image.data))
 
 # ...or feed it back into a chat turn
 from llm_provider import Message, TextPart
+
 Message(role="user", content=[TextPart("Describe this"), image])
 ```
 
@@ -408,10 +409,7 @@ raises `ValidationError` before any network call.
 ### Error Handling
 
 ```python
-from llm_provider.errors import (
-    LLMError, ConnectionFailedError, TimeoutError,
-    is_retryable
-)
+from llm_provider.errors import LLMError, ConnectionFailedError, TimeoutError, is_retryable
 
 try:
     response = provider.chat(request)
@@ -502,7 +500,7 @@ factory.register_provider("ollama", create_ollama_provider)
 ollama_config = ProviderConfig(
     host="http://localhost:11434",  # Default Ollama URL
     default_model="llama3",
-    timeout=30.0
+    timeout=30.0,
 )
 ```
 
@@ -520,7 +518,7 @@ The `extra_settings` dict is forwarded as top-level fields in the Ollama `/api/c
 ollama_config = ProviderConfig(
     host="http://localhost:11434",
     default_model="qwen3:8b",
-    extra_settings={"think": False, "keep_alive": "10m"}
+    extra_settings={"think": False, "keep_alive": "10m"},
 )
 ```
 
@@ -545,7 +543,7 @@ gemini_config = ProviderConfig(
     host="https://generativelanguage.googleapis.com",  # for interface consistency
     default_model="gemini-2.0-flash",
     api_key="YOUR_GEMINI_API_KEY",
-    timeout=60.0
+    timeout=60.0,
 )
 ```
 
@@ -575,7 +573,7 @@ openai_config = ProviderConfig(
     host="https://api.openai.com",
     default_model="gpt-4o",
     api_key="YOUR_OPENAI_API_KEY",
-    timeout=60.0
+    timeout=60.0,
 )
 ```
 
@@ -595,7 +593,7 @@ openai_config = ProviderConfig(
     host="https://api.openai.com",
     default_model="gpt-4o",
     api_key="YOUR_KEY",
-    extra_settings={"base_url": "https://your-azure-endpoint.openai.azure.com/"}
+    extra_settings={"base_url": "https://your-azure-endpoint.openai.azure.com/"},
 )
 ```
 
@@ -618,7 +616,7 @@ anthropic_config = ProviderConfig(
     host="https://api.anthropic.com",
     default_model="claude-sonnet-4-6",
     api_key="YOUR_ANTHROPIC_API_KEY",
-    timeout=60.0
+    timeout=60.0,
 )
 ```
 
@@ -641,7 +639,7 @@ anthropic_config = ProviderConfig(
     host="https://api.anthropic.com",
     default_model="claude-opus-4-7",
     api_key="YOUR_ANTHROPIC_API_KEY",
-    extra_settings={"max_tokens": 16384}
+    extra_settings={"max_tokens": 16384},
 )
 ```
 
@@ -650,7 +648,9 @@ anthropic_config = ProviderConfig(
 ```python
 from llm_provider import ProviderFactory
 from llm_provider.providers import (
-    create_ollama_provider, create_openai_provider, create_anthropic_provider
+    create_ollama_provider,
+    create_openai_provider,
+    create_anthropic_provider,
 )
 
 factory = ProviderFactory()
@@ -675,33 +675,36 @@ To create a custom provider, implement the `Provider` interface:
 from llm_provider import Provider, ChatRequest, ChatResponse, Model, ProviderFeatures
 from llm_provider.models import ProviderConfig
 
+
 class MyCustomProvider(Provider):
     def __init__(self, config: ProviderConfig):
         self._config = config
-    
+
     def chat(self, request: ChatRequest) -> ChatResponse:
         # Implement chat logic
         pass
-    
+
     def list_models(self) -> List[Model]:
         # Implement model listing
         pass
-    
+
     def name(self) -> str:
         return "my_custom_provider"
-    
+
     def is_available(self) -> bool:
         # Implement availability check
         pass
-    
+
     def supported_features(self) -> ProviderFeatures:
         # Return supported features
         pass
+
 
 # Factory function
 def create_my_provider(config_dict: dict) -> Provider:
     config = ProviderConfig(**config_dict)
     return MyCustomProvider(config)
+
 
 # Register provider
 factory.register_provider("my_provider", create_my_provider)
@@ -716,17 +719,11 @@ factory_config = FactoryConfig(
     default_provider="ollama",
     provider_configs={
         "ollama": ProviderConfig(
-            host="http://localhost:11434",
-            default_model="llama2",
-            timeout=30.0,
-            retry_attempts=3
+            host="http://localhost:11434", default_model="llama2", timeout=30.0, retry_attempts=3
         )
     },
-    model_preferences={
-        "summarization": "llama2",
-        "code": "codellama"
-    },
-    fallback_providers=["ollama", "backup_ollama"]
+    model_preferences={"summarization": "llama2", "code": "codellama"},
+    fallback_providers=["ollama", "backup_ollama"],
 )
 ```
 
@@ -740,9 +737,7 @@ provider_config = ProviderConfig(
     retry_attempts=3,
     api_key="optional-api-key",
     rate_limit=60,  # requests per minute
-    extra_settings={
-        "custom_setting": "value"
-    }
+    extra_settings={"custom_setting": "value"},
 )
 ```
 
