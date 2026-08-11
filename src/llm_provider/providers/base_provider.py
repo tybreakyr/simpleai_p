@@ -30,6 +30,7 @@ from ..models import (
 from ..provider import Provider
 from ..retry import RetryConfig, retry_with_backoff
 from ..schema_transform import FlattenMapping, flatten_tool_schema, renest_arguments
+from ..tool_arg_decode import decode_tool_arguments
 
 T = TypeVar("T")
 
@@ -190,6 +191,23 @@ class BaseProvider(Provider[T], ABC, Generic[T]):
             for tc in response.tool_calls
         ]
         return dataclasses.replace(response, tool_calls=restored)
+
+    @staticmethod
+    def _decode_tool_arguments(
+        tool_name: str, arguments: Any, tools: list[ToolSchema] | None
+    ) -> Any:
+        """Repair double-encoded structured tool arguments, gated on the schema.
+
+        Some OpenAI-compatible local servers (mlx-lm) return array-of-object
+        arguments as a JSON *string* nested inside the arguments JSON. See
+        ``tool_arg_decode``. A no-op when the tool isn't in ``tools``.
+        """
+        if not tools:
+            return arguments
+        for tool in tools:
+            if tool.name == tool_name:
+                return decode_tool_arguments(arguments, tool.input_schema)
+        return arguments
 
     def _decode_structured_dict(self, text: str) -> dict[str, Any]:
         """Decode a JSON object from response text for ``response_schema`` calls.

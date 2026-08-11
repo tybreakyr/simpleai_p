@@ -14,6 +14,7 @@ which allows caller-controlled Ollama options such as:
 Requires: ``requests``
 """
 
+import json
 from typing import Any, TypeVar
 from urllib.parse import urljoin
 
@@ -197,11 +198,21 @@ class OllamaProvider(BaseProvider[T]):
         if "tool_calls" in message_data:
             for tc in message_data["tool_calls"]:
                 func = tc.get("function", {})
+                name = func.get("name", "")
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (ValueError, TypeError):
+                        args = {}
+                # Local OpenAI-compatible servers can double-encode structured
+                # arguments; decode where the declared schema says so.
+                args = self._decode_tool_arguments(name, args, request.tools)
                 tool_calls.append(
                     ToolCall(
                         id=ToolCall.make_id(),
-                        name=func.get("name", ""),
-                        arguments=func.get("arguments", {}),
+                        name=name,
+                        arguments=args,
                     )
                 )
 
