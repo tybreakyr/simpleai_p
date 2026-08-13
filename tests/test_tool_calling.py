@@ -552,6 +552,38 @@ class TestOllamaToolCalling(unittest.TestCase):
         ids = [tc.id for tc in resp.tool_calls]
         self.assertEqual(len(set(ids)), 2, "Multiple tool calls must have unique IDs")
 
+    def test_string_arguments_are_decoded(self):
+        self.provider._session.post.return_value = MagicMock(
+            json=MagicMock(
+                return_value={
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "weather", "arguments": '{"loc": "NY"}'}}
+                        ],
+                    }
+                }
+            )
+        )
+        resp = self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")]))
+        self.assertEqual(resp.tool_calls[0].arguments, {"loc": "NY"})
+
+    def test_unparseable_string_arguments_warn_and_drop(self):
+        self.provider._session.post.return_value = MagicMock(
+            json=MagicMock(
+                return_value={
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{"function": {"name": "weather", "arguments": "{loc:"}}],
+                    }
+                }
+            )
+        )
+        with self.assertLogs("llm_provider.providers.ollama_provider", level="WARNING") as logs:
+            resp = self.provider.chat(ChatRequest(messages=[Message(role="user", content="hi")]))
+        self.assertEqual(resp.tool_calls[0].arguments, {})
+        self.assertIn("{loc:", logs.output[0])
+
 
 # ─── Ollama async ────────────────────────────────────────────────────────────
 
