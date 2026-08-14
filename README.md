@@ -244,6 +244,14 @@ either direction). The pure codec is also exposed directly:
 `flatten_tool_schema(schema) -> (flat_schema, mapping)` and
 `renest_arguments(flat_args, mapping)`.
 
+Separately, some local OpenAI-compatible servers (observed on mlx-lm) double-encode
+**array-of-object** or **object** tool arguments: after the outer JSON is parsed, a
+property the schema declares as `array`/`object` still comes back as a JSON string
+rather than a `list`/`dict`. The OpenAI and Ollama providers detect this against the
+tool's declared `input_schema` and decode the inner layer automatically — a property
+that also allows `string` (`type: [...]`, `anyOf`/`oneOf`) is never touched, so this
+never rewrites legitimately string-valued arguments. No configuration needed.
+
 ### Multi-turn Tool Loops (tool results)
 
 To run an agentic loop — the model calls a tool, you execute it, feed the result

@@ -248,6 +248,9 @@ class OpenAIProvider(BaseProvider[T]):
                     args = json.loads(tc.function.arguments)
                 except Exception:
                     args = tc.function.arguments if isinstance(tc.function.arguments, dict) else {}
+                # mlx-lm double-encodes array-of-object arguments; decode the
+                # inner layer where the declared schema says it's structured.
+                args = self._decode_tool_arguments(tc.function.name, args, request.tools)
                 tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
 
         structured_data: T | None = None

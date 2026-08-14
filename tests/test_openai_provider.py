@@ -2,6 +2,7 @@
 Unit tests for the OpenAI provider implementation.
 """
 
+import json
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -14,7 +15,7 @@ from llm_provider.errors import (
     RateLimitExceededError,
     TimeoutError,
 )
-from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
+from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt, ToolSchema
 from llm_provider.retry import RetryConfig
 
 
@@ -333,6 +334,73 @@ class TestCreateOpenAIProvider(unittest.TestCase):
         self.assertEqual(
             provider._config.extra_settings["base_url"], "https://my-proxy.example.com"
         )
+
+
+class TestOpenAIProviderDoubleEncodedToolArgs(unittest.TestCase):
+    """mlx-lm returns array-of-object tool args double-encoded (see tool_arg_decode)."""
+
+    QUESTIONNAIRE = ToolSchema(
+        name="generate_questionnaire",
+        description="Ask the player some questions",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "options": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+            },
+            "required": ["questions"],
+        },
+    )
+
+    def setUp(self):
+        self.provider = _make_provider()
+
+    def _respond(self, arguments):
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "generate_questionnaire"
+        tc.function.arguments = arguments
+        choice = MagicMock()
+        choice.message.content = None
+        choice.message.tool_calls = [tc]
+        choice.finish_reason = "tool_calls"
+        resp = MagicMock()
+        resp.choices = [choice]
+        self.provider._client.chat.completions.create.return_value = resp
+        request = ChatRequest(
+            messages=[Message(role="user", content="Hi")],
+            tools=[self.QUESTIONNAIRE],
+            tool_choice="required",
+            model="qwen3.5-9b",
+        )
+        return self.provider.chat(request)
+
+    def test_double_encoded_array_decodes_to_list(self):
+        questions = [{"text": "Who are you?", "options": ["a", "b"]}]
+        response = self._respond(
+            json.dumps({"title": "Wizard", "questions": json.dumps(questions)})
+        )
+        args = response.tool_calls[0].arguments
+        self.assertIsInstance(args["questions"], list)
+        self.assertEqual(args["questions"], questions)
+
+    def test_well_formed_array_is_unchanged(self):
+        questions = [{"text": "Who are you?", "options": ["a"]}]
+        response = self._respond(json.dumps({"title": "Wizard", "questions": questions}))
+        self.assertEqual(response.tool_calls[0].arguments["questions"], questions)
+
+    def test_string_argument_that_looks_like_json_is_preserved(self):
+        response = self._respond(json.dumps({"title": '["a"]', "questions": []}))
+        self.assertEqual(response.tool_calls[0].arguments["title"], '["a"]')
 
 
 if __name__ == "__main__":

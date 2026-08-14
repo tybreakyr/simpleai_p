@@ -14,6 +14,8 @@ which allows caller-controlled Ollama options such as:
 Requires: ``requests``
 """
 
+import json
+import logging
 from typing import Any, TypeVar
 from urllib.parse import urljoin
 
@@ -44,6 +46,8 @@ from ..provider import Provider
 from .base_provider import BaseProvider
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 # extra_settings keys this library interprets itself rather than forwarding as
 # top-level Ollama payload fields (which would be ignored, or worse, rejected).
@@ -197,11 +201,29 @@ class OllamaProvider(BaseProvider[T]):
         if "tool_calls" in message_data:
             for tc in message_data["tool_calls"]:
                 func = tc.get("function", {})
+                name = func.get("name", "")
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (ValueError, TypeError):
+                        # ToolCall requires a dict, so the raw string can't be
+                        # passed through — say so rather than losing it silently.
+                        logger.warning(
+                            "Ollama returned unparseable string arguments for tool %r; "
+                            "dropping them. Raw value: %r",
+                            name,
+                            args,
+                        )
+                        args = {}
+                # Local OpenAI-compatible servers can double-encode structured
+                # arguments; decode where the declared schema says so.
+                args = self._decode_tool_arguments(name, args, request.tools)
                 tool_calls.append(
                     ToolCall(
                         id=ToolCall.make_id(),
-                        name=func.get("name", ""),
-                        arguments=func.get("arguments", {}),
+                        name=name,
+                        arguments=args,
                     )
                 )
 
