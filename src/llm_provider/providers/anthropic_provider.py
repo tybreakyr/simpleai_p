@@ -12,7 +12,8 @@ Supported features:
     - Chat with system prompts (top-level system parameter)
     - Structured output (JSON extraction)
     - Vision / multimodal input (ImagePart base64 and ImageUrl)
-    - Temperature and top_p sampling
+    - Temperature and top_p sampling (dropped for models that reject it)
+    - Thinking blocks carried through tool-call round trips
     - Up to 200k token context window (model-dependent)
 
 Notes:
@@ -22,10 +23,19 @@ Notes:
       system prompts are passed as a separate top-level parameter.
     - The SDK has built-in retry logic (2 retries by default). This provider
       layer adds its own retry on top via BaseProvider for consistency.
+    - Current Claude models (Opus 4.7+, Sonnet 5+, Haiku 5.5, Fable) return a
+      400 for non-default temperature/top_p/top_k, so those are omitted for any
+      model not known to accept them.
+    - Current models think by default, and Anthropic's guidance is to send a
+      tool-use turn's thinking blocks back unmodified so the model keeps its
+      reasoning across the loop (the API tolerated omitting them as of
+      2026-10-27, but that is not guaranteed). They ride on each ToolCall's opaque
+      thought_signature, so callers that echo tool_calls back need no changes.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, TypeVar
 
 from ..errors import (
@@ -59,6 +69,29 @@ _DEFAULT_MAX_TOKENS = 8192
 # structured output is enforced by forcing a single synthetic tool whose
 # input_schema is the requested schema and reading its arguments back.
 _STRUCTURED_OUTPUT_TOOL = "emit_structured_output"
+
+# Models that still accept temperature/top_p: the Claude 3 family and Claude 4
+# through 4.6 (bare or date-suffixed IDs). Anything newer, or unrecognised, is
+# treated as rejecting them, since every model released since does.
+_SAMPLING_MODEL_RE = re.compile(r"^claude-(3-|(opus|sonnet|haiku)-4(-[0-6])?(-\d{8})?$)")
+
+
+def _accepts_sampling_params(model: str | None) -> bool:
+    return bool(model) and _SAMPLING_MODEL_RE.match(model) is not None
+
+
+def _thinking_blocks(content: list[Any]) -> list[dict[str, Any]]:
+    """Thinking blocks from a response, in the shape the API takes them back."""
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        kind = getattr(block, "type", None)
+        if kind == "thinking":
+            blocks.append(
+                {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+            )
+        elif kind == "redacted_thinking":
+            blocks.append({"type": "redacted_thinking", "data": block.data})
+    return blocks
 
 
 class AnthropicProvider(BaseProvider[T]):
@@ -115,7 +148,14 @@ class AnthropicProvider(BaseProvider[T]):
         messages: list[dict[str, Any]] = []
         for msg in request.messages:
             if msg.role == "assistant" and msg.tool_calls:
-                blocks: list[dict[str, Any]] = []
+                # Thinking blocks lead the turn, unmodified. Every call
+                # carries the same list, so take it from the first that has one
+                # (callers may echo back only a subset of the calls).
+                thinking = next(
+                    (tc.thought_signature for tc in msg.tool_calls if tc.thought_signature),
+                    None,
+                )
+                blocks: list[dict[str, Any]] = list(thinking or [])
                 if msg.content:
                     blocks.append({"type": "text", "text": msg.content})
                 for tc in msg.tool_calls:
@@ -149,17 +189,19 @@ class AnthropicProvider(BaseProvider[T]):
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
+        model = request.model or self._config.default_model
         kwargs: dict[str, Any] = {
-            "model": request.model or self._config.default_model,
+            "model": model,
             "max_tokens": self._max_tokens,
             "messages": messages,
         }
         if request.system_prompt:
             kwargs["system"] = request.system_prompt.content
-        if request.temperature is not None:
-            kwargs["temperature"] = request.temperature
-        if request.top_p is not None:
-            kwargs["top_p"] = request.top_p
+        if _accepts_sampling_params(model):
+            if request.temperature is not None:
+                kwargs["temperature"] = request.temperature
+            if request.top_p is not None:
+                kwargs["top_p"] = request.top_p
 
         if request.response_schema is not None:
             # Force a single synthetic tool to enforce the schema.
@@ -199,10 +241,18 @@ class AnthropicProvider(BaseProvider[T]):
 
         from ..models import ToolCall
 
+        thinking = _thinking_blocks(response.content) or None
         tool_calls = []
         for block in response.content:
             if getattr(block, "type", None) == "tool_use":
-                tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=block.input,
+                        thought_signature=thinking,
+                    )
+                )
 
         structured_data: T | None = None
         if request.response_schema is not None:

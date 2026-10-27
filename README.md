@@ -632,9 +632,16 @@ anthropic_config = ProviderConfig(
 - Structured output (via JSON extraction)
 - Vision / multimodal input (model-dependent)
 - System prompts (passed as top-level `system` parameter)
-- Temperature and top_p sampling
+- Temperature and top_p sampling — sent only to models that accept it (Claude 3 and
+  Claude 4 through 4.6). Current models (Opus 4.7+, Sonnet 5+, Haiku 5.5, Fable) return a
+  400 for non-default values, so the provider omits them there rather than failing.
 - Function calling (tool use)
-- Up to 200k token context window (model-dependent)
+- Thinking across tool calls — current models think by default, and Anthropic's guidance
+  is to send a tool-use turn's `thinking` blocks back unmodified so the model keeps its
+  reasoning across the loop. The provider attaches them to each
+  returned `ToolCall.thought_signature` and replays them when that call is echoed back in
+  history, so a tool loop that passes `tool_calls` back needs no changes.
+- Up to 1M token context window (model-dependent)
 
 **Anthropic-specific `extra_settings`:**
 
