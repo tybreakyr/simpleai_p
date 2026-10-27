@@ -284,10 +284,11 @@ if response.tool_calls:
     print(final.message)
 ```
 
-> **Gemini note:** Gemini 3.x requires the opaque `thought_signature` on a
+> **Thought-signature note:** Gemini 3.x requires the opaque `thought_signature` on a
 > replayed `functionCall` part. It is captured into `ToolCall.thought_signature`
 > on parse and replayed automatically when you echo the call back — no caller
-> action needed. (Other providers leave the field `None`.)
+> action needed. The Anthropic provider uses the same field to carry a tool-use
+> turn's `thinking` blocks (on every returned call). Other providers leave it `None`.
 
 ### Per-request Provider Passthrough (`extra_body`)
 

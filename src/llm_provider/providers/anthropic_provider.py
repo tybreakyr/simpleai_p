@@ -14,7 +14,7 @@ Supported features:
     - Vision / multimodal input (ImagePart base64 and ImageUrl)
     - Temperature and top_p sampling (dropped for models that reject it)
     - Thinking blocks carried through tool-call round trips
-    - Up to 200k token context window (model-dependent)
+    - Up to 1M token context window (model-dependent)
 
 Notes:
     - Anthropic's messages API requires max_tokens. Set via extra_settings

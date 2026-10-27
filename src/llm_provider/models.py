@@ -188,7 +188,8 @@ class ToolCall:
     # Opaque provider-specific data that must be replayed verbatim when this
     # call is sent back in conversation history. Gemini 3.x uses it to carry a
     # ``thought_signature`` on the functionCall part (required, or the API 400s).
-    # Other providers leave it None.
+    # Anthropic uses it for the turn's thinking blocks (a list of dicts, set on
+    # every call from that response). Other providers leave it None.
     thought_signature: Any | None = None
 
     def __post_init__(self):
