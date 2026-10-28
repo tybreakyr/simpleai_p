@@ -506,7 +506,6 @@ class TestUsage(unittest.TestCase):
     """Token counts ride the response so callers can measure what a call cost."""
 
     def _parse(self, usage):
-        from types import SimpleNamespace
 
         from llm_provider.models import ChatRequest, Message
 
