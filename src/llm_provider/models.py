@@ -357,6 +357,10 @@ class ChatResponse(Generic[T]):
     structured_data: T | None = None
     tool_calls: list[ToolCall] | None = None
     stop_reason: str | None = None  # "end_turn" | "tool_use" | "max_tokens"
+    # Token counts as the provider reported them, e.g. {"input_tokens": 1200,
+    # "output_tokens": 340, "cache_read_input_tokens": 0}. None when the provider
+    # does not report usage (or does not populate it yet).
+    usage: dict[str, int] | None = None
 
     def __post_init__(self):
         """Validate chat response after initialization."""

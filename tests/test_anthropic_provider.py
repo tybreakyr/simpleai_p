@@ -500,3 +500,36 @@ class TestCreateAnthropicProvider(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUsage(unittest.TestCase):
+    """Token counts ride the response so callers can measure what a call cost."""
+
+    def _parse(self, usage):
+        from types import SimpleNamespace
+
+        from llm_provider.models import ChatRequest, Message
+
+        provider = _make_provider()
+        response = _make_message_response("hi")
+        response.usage = usage
+        req = ChatRequest(messages=[Message(role="user", content="x")])
+        return provider._parse_response(response, req)
+
+    def test_reported_token_counts_are_kept(self):
+        from types import SimpleNamespace
+
+        out = self._parse(
+            SimpleNamespace(
+                input_tokens=1200,
+                output_tokens=340,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=None,
+            )
+        )
+        self.assertEqual(
+            out.usage, {"input_tokens": 1200, "output_tokens": 340, "cache_read_input_tokens": 0}
+        )
+
+    def test_no_usage_reported_is_none(self):
+        self.assertIsNone(self._parse(None).usage)

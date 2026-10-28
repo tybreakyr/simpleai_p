@@ -94,6 +94,27 @@ def _thinking_blocks(content: list[Any]) -> list[dict[str, Any]]:
     return blocks
 
 
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _usage(response) -> dict[str, int] | None:
+    """The response's token counts (thinking is billed inside output_tokens)."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    out = {}
+    for f in _USAGE_FIELDS:
+        v = getattr(usage, f, None)
+        if isinstance(v, int):
+            out[f] = v
+    return out or None
+
+
 class AnthropicProvider(BaseProvider[T]):
     """
     Anthropic provider via the anthropic SDK.
@@ -282,6 +303,7 @@ class AnthropicProvider(BaseProvider[T]):
             structured_data=structured_data,
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=getattr(response, "stop_reason", None),
+            usage=_usage(response),
         )
 
     def chat(self, request: ChatRequest[T]) -> ChatResponse[T]:
