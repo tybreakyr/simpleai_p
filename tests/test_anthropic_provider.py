@@ -13,7 +13,7 @@ from llm_provider.errors import (
     RateLimitExceededError,
     TimeoutError,
 )
-from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt
+from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt, ToolCall
 from llm_provider.retry import RetryConfig
 
 
@@ -227,6 +227,140 @@ class TestAnthropicProviderChat(unittest.TestCase):
         request = ChatRequest(messages=[Message(role="user", content="Hi")])
         response = self.provider.chat(request)
         self.assertEqual(response.message, "Hello")
+
+
+def _block(type_, **fields):
+    block = MagicMock()
+    block.type = type_
+    for key, value in fields.items():
+        setattr(block, key, value)
+    return block
+
+
+class TestAnthropicSamplingParams(unittest.TestCase):
+    """Current models 400 on non-default sampling, so it is only sent to older ones."""
+
+    def setUp(self):
+        self.provider = _make_provider()
+        self.provider._client.messages.create.return_value = _make_message_response()
+
+    def _sent(self, model):
+        request = ChatRequest(
+            messages=[Message(role="user", content="Hi")],
+            model=model,
+            temperature=0.7,
+            top_p=0.9,
+        )
+        self.provider.chat(request)
+        return self.provider._client.messages.create.call_args[1]
+
+    def test_kept_for_models_that_accept_it(self):
+        for model in (
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-1-20250805",
+            "claude-3-5-haiku-20241022",
+        ):
+            with self.subTest(model=model):
+                kwargs = self._sent(model)
+                self.assertEqual(kwargs["temperature"], 0.7)
+                self.assertEqual(kwargs["top_p"], 0.9)
+
+    def test_dropped_for_current_models(self):
+        for model in (
+            "claude-haiku-5-5",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5",
+            "claude-opus-5-5",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-fable-5-1",
+        ):
+            with self.subTest(model=model):
+                kwargs = self._sent(model)
+                self.assertNotIn("temperature", kwargs)
+                self.assertNotIn("top_p", kwargs)
+
+    def test_judged_on_the_default_model_when_request_has_none(self):
+        provider = _make_provider(_make_config(default_model="claude-haiku-5-5"))
+        provider._client.messages.create.return_value = _make_message_response()
+        provider.chat(ChatRequest(messages=[Message(role="user", content="Hi")], temperature=0.0))
+        self.assertNotIn("temperature", provider._client.messages.create.call_args[1])
+
+
+class TestAnthropicThinkingRoundTrip(unittest.TestCase):
+    """A tool-use turn's thinking blocks must go back to the API unmodified."""
+
+    THINKING = {"type": "thinking", "thinking": "", "signature": "sig-abc"}
+    REDACTED = {"type": "redacted_thinking", "data": "opaque"}
+
+    def setUp(self):
+        self.provider = _make_provider()
+
+    def test_thinking_rides_on_every_tool_call(self):
+        resp = MagicMock()
+        resp.content = [
+            _block("thinking", thinking="", signature="sig-abc"),
+            _block("redacted_thinking", data="opaque"),
+            _block("text", text="Looking that up."),
+            _block("tool_use", id="tu_1", name="lookup", input={"q": "a"}),
+            _block("tool_use", id="tu_2", name="lookup", input={"q": "b"}),
+        ]
+        self.provider._client.messages.create.return_value = resp
+        response = self.provider.chat(ChatRequest(messages=[Message(role="user", content="Hi")]))
+
+        self.assertEqual(response.message, "Looking that up.")
+        for call in response.tool_calls:
+            self.assertEqual(call.thought_signature, [self.THINKING, self.REDACTED])
+
+    def test_no_thinking_leaves_calls_bare(self):
+        resp = MagicMock()
+        resp.content = [_block("tool_use", id="tu_1", name="lookup", input={})]
+        self.provider._client.messages.create.return_value = resp
+        response = self.provider.chat(ChatRequest(messages=[Message(role="user", content="Hi")]))
+        self.assertIsNone(response.tool_calls[0].thought_signature)
+
+    def _history(self, calls):
+        return [
+            Message(role="user", content="Hi"),
+            Message(role="assistant", content="Looking that up.", tool_calls=calls),
+            Message(role="tool", content="result", tool_call_id=calls[0].id),
+        ]
+
+    def test_thinking_leads_the_echoed_assistant_turn(self):
+        self.provider._client.messages.create.return_value = _make_message_response()
+        thinking = [self.THINKING, self.REDACTED]
+        calls = [
+            ToolCall(id="tu_1", name="lookup", arguments={"q": "a"}, thought_signature=thinking),
+            ToolCall(id="tu_2", name="lookup", arguments={"q": "b"}, thought_signature=thinking),
+        ]
+        self.provider.chat(ChatRequest(messages=self._history(calls)))
+
+        assistant = self.provider._client.messages.create.call_args[1]["messages"][1]
+        types = [block["type"] for block in assistant["content"]]
+        self.assertEqual(types, ["thinking", "redacted_thinking", "text", "tool_use", "tool_use"])
+        self.assertEqual(assistant["content"][0], self.THINKING)
+
+    def test_survives_echoing_a_subset_of_calls(self):
+        self.provider._client.messages.create.return_value = _make_message_response()
+        calls = [
+            ToolCall(id="tu_2", name="lookup", arguments={}, thought_signature=[self.THINKING])
+        ]
+        self.provider.chat(ChatRequest(messages=self._history(calls)))
+
+        assistant = self.provider._client.messages.create.call_args[1]["messages"][1]
+        self.assertEqual(assistant["content"][0], self.THINKING)
+
+    def test_calls_without_thinking_send_no_thinking_block(self):
+        self.provider._client.messages.create.return_value = _make_message_response()
+        calls = [ToolCall(id="tu_1", name="lookup", arguments={})]
+        self.provider.chat(ChatRequest(messages=self._history(calls)))
+
+        assistant = self.provider._client.messages.create.call_args[1]["messages"][1]
+        self.assertEqual([b["type"] for b in assistant["content"]], ["text", "tool_use"])
 
 
 class TestAnthropicProviderErrorClassification(unittest.TestCase):
