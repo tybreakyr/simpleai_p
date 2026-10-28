@@ -471,7 +471,7 @@ else:
 - `ContentPart`: Type alias for `TextPart | ImagePart | ImageUrl`
 - `SystemPrompt`: System-level instructions
 - `ChatRequest`: Input structure for chat operations (supports `tools`, `tool_choice`, and `extra_body`)
-- `ChatResponse`: Output structure from chat operations (supports `tool_calls`)
+- `ChatResponse`: Output structure from chat operations (supports `tool_calls`; `usage` holds token counts as the provider reports them — `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` — currently populated by Anthropic only, `None` elsewhere)
 - `ImageGenerationRequest`: Input for image generation/editing (`prompt`, `model`, `n`, `size`, `quality`, `extra_body`, plus img2img `image` and `mask`). `prompt` is required for text→image; when `image` is set it's optional (omit it for an OpenAI variation). Exposes `is_edit` / `is_variation` mode helpers.
 - `ImageGenerationResponse`: Output from image generation or editing (`list[ImagePart]` + optional `revised_prompt`)
 - `ToolSchema`: Definition of an available tool (function)
