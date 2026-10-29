@@ -121,7 +121,15 @@ class TestAnthropicToolCalling(unittest.TestCase):
         self.assertIn("tools", kwargs)
         self.assertEqual(
             kwargs["tools"],
-            [{"name": "weather", "description": "get weather", "input_schema": {"type": "object"}}],
+            [
+                {
+                    "name": "weather",
+                    "description": "get weather",
+                    "input_schema": {"type": "object"},
+                    # No system prompt, so the last tool holds the cache breakpoint.
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
         )
 
     def test_response_parses_tool_calls(self):

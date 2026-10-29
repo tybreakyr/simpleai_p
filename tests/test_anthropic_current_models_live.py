@@ -18,10 +18,16 @@ Arms:
     its thinking blocks and the follow-up succeeds. Control: the same history with
     the thinking blocks stripped, recorded rather than asserted — on 2026-10-27
     the API accepted it, so replay is guidance-compliance, not a 400 guard.
+  * **prompt caching** — subject: the same long system prompt sent twice through
+    the provider is written then read from cache, and so is a continued
+    conversation's history. Control: the same prompt sent straight to the SDK
+    without markers never caches, which is what makes the markers load-bearing.
+    Each run salts its prompts so an earlier run's cache entries can't satisfy it.
 """
 
 import os
 import unittest
+import uuid
 
 from llm_provider.models import ChatRequest, Message, ToolCall, ToolSchema
 from llm_provider.providers.anthropic_provider import create_anthropic_provider
@@ -159,3 +165,66 @@ class TestThinkingRoundTrip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ~6K tokens: comfortably past every current model's minimum cacheable prefix.
+_RULES = "\n".join(
+    f"Rule {i}: crates bound for warehouse W{i % 3 + 1} are logged in ledger {i} "
+    "and checked against the manifest before loading."
+    for i in range(150)
+)
+
+
+def _usage(response, field):
+    return (response.usage or {}).get(field, 0)
+
+
+@unittest.skipUnless(API_KEY, "ANTHROPIC_API_KEY not set")
+class TestPromptCaching(unittest.TestCase):
+    def _system(self):
+        return f"Run {uuid.uuid4()}. You are a shipping clerk.\n{_RULES}"
+
+    def test_subject_system_prompt_is_written_then_read(self):
+        from llm_provider.models import SystemPrompt
+
+        provider = _provider()
+        request = ChatRequest(
+            messages=[Message(role="user", content="Reply with the single word: ready")],
+            system_prompt=SystemPrompt(content=self._system()),
+        )
+        first = provider.chat(request)
+        second = provider.chat(request)
+        print(f"\nsystem prompt: first={first.usage} second={second.usage}")
+        self.assertGreater(_usage(first, "cache_creation_input_tokens"), 0)
+        self.assertGreater(_usage(second, "cache_read_input_tokens"), 0)
+
+    def test_subject_conversation_history_is_written_then_read(self):
+        provider = _provider()
+        request = ChatRequest(
+            messages=[
+                Message(role="user", content=self._system()),
+                Message(role="assistant", content="Understood. I will follow every rule."),
+                Message(role="user", content="Reply with the single word: ready"),
+            ]
+        )
+        first = provider.chat(request)
+        second = provider.chat(request)
+        print(f"\nhistory: first={first.usage} second={second.usage}")
+        self.assertGreater(_usage(first, "cache_creation_input_tokens"), 0)
+        self.assertGreater(_usage(second, "cache_read_input_tokens"), 0)
+
+    def test_control_unmarked_sdk_request_never_caches(self):
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=API_KEY)
+        kwargs = dict(
+            model=MODEL,
+            max_tokens=200,
+            system=self._system(),
+            messages=[{"role": "user", "content": "Reply with the single word: ready"}],
+        )
+        first = client.messages.create(**kwargs)
+        second = client.messages.create(**kwargs)
+        print(f"\ncontrol: first={first.usage} second={second.usage}")
+        self.assertFalse(first.usage.cache_creation_input_tokens)
+        self.assertFalse(second.usage.cache_read_input_tokens)
