@@ -13,7 +13,14 @@ from llm_provider.errors import (
     RateLimitExceededError,
     TimeoutError,
 )
-from llm_provider.models import ChatRequest, Message, ProviderConfig, SystemPrompt, ToolCall
+from llm_provider.models import (
+    ChatRequest,
+    Message,
+    ProviderConfig,
+    SystemPrompt,
+    ToolCall,
+    ToolSchema,
+)
 from llm_provider.retry import RetryConfig
 
 
@@ -142,7 +149,7 @@ class TestAnthropicProviderChat(unittest.TestCase):
         )
         self.provider.chat(request)
         call_kwargs = self.provider._client.messages.create.call_args[1]
-        self.assertEqual(call_kwargs["system"], "Be concise")
+        self.assertEqual(call_kwargs["system"][0]["text"], "Be concise")
 
     def test_chat_without_system_prompt_omits_system_key(self):
         self.provider._client.messages.create.return_value = _make_message_response()
@@ -532,3 +539,60 @@ class TestUsage(unittest.TestCase):
 
     def test_no_usage_reported_is_none(self):
         self.assertIsNone(self._parse(None).usage)
+
+
+class TestPromptCaching(unittest.TestCase):
+    EPHEMERAL = {"type": "ephemeral"}
+
+    def setUp(self):
+        self.provider = _make_provider()
+
+    def _kwargs(self, **request):
+        request.setdefault("messages", [Message(role="user", content="Hi")])
+        return self.provider._build_kwargs(ChatRequest(**request))
+
+    def _tool(self, name):
+        return ToolSchema(name=name, description=name, input_schema={"type": "object"})
+
+    def test_system_prompt_is_a_cached_block(self):
+        kwargs = self._kwargs(system_prompt=SystemPrompt(content="Be concise"))
+        self.assertEqual(
+            kwargs["system"],
+            [{"type": "text", "text": "Be concise", "cache_control": self.EPHEMERAL}],
+        )
+
+    def test_tools_are_left_unmarked_when_system_covers_them(self):
+        kwargs = self._kwargs(
+            system_prompt=SystemPrompt(content="sys"), tools=[self._tool("a"), self._tool("b")]
+        )
+        self.assertTrue(all("cache_control" not in t for t in kwargs["tools"]))
+
+    def test_last_tool_is_marked_without_a_system_prompt(self):
+        kwargs = self._kwargs(tools=[self._tool("a"), self._tool("b")])
+        self.assertNotIn("cache_control", kwargs["tools"][0])
+        self.assertEqual(kwargs["tools"][1]["cache_control"], self.EPHEMERAL)
+
+    def test_one_shot_request_does_not_cache_its_tail(self):
+        kwargs = self._kwargs(system_prompt=SystemPrompt(content="sys"))
+        self.assertNotIn("cache_control", kwargs)
+
+    def test_continued_conversation_caches_its_tail(self):
+        kwargs = self._kwargs(
+            messages=[
+                Message(role="user", content="Hi"),
+                Message(role="assistant", content="Hello"),
+                Message(role="user", content="Again"),
+            ]
+        )
+        self.assertEqual(kwargs["cache_control"], self.EPHEMERAL)
+
+    def test_tool_loop_caches_its_tail(self):
+        calls = [ToolCall(id="t1", name="a", arguments={})]
+        kwargs = self._kwargs(
+            messages=[
+                Message(role="user", content="Hi"),
+                Message(role="assistant", content="", tool_calls=calls),
+                Message(role="tool", content="result", tool_call_id="t1"),
+            ]
+        )
+        self.assertEqual(kwargs["cache_control"], self.EPHEMERAL)

@@ -642,6 +642,12 @@ anthropic_config = ProviderConfig(
   reasoning across the loop. The provider attaches them to each
   returned `ToolCall.thought_signature` and replays them when that call is echoed back in
   history, so a tool loop that passes `tool_calls` back needs no changes.
+- Prompt caching, automatic — the tools + system prompt carry a cache breakpoint on every
+  request, and the message history is cached too once the request continues a conversation
+  (it has an assistant turn). One-shot calls don't cache their final user message, which is
+  never re-sent. Cache reads bill at ~0.1x input; check `ChatResponse.usage`
+  (`cache_read_input_tokens`). Prefixes under the model's minimum (512+ tokens) don't cache.
+  All breakpoints use the 5-minute TTL.
 - Up to 1M token context window (model-dependent)
 
 **Anthropic-specific `extra_settings`:**

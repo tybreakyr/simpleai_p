@@ -14,6 +14,8 @@ Supported features:
     - Vision / multimodal input (ImagePart base64 and ImageUrl)
     - Temperature and top_p sampling (dropped for models that reject it)
     - Thinking blocks carried through tool-call round trips
+    - Prompt caching: tools + system prompt always, message history once the
+      request continues a conversation (see _add_cache_breakpoints)
     - Up to 1M token context window (model-dependent)
 
 Notes:
@@ -69,6 +71,10 @@ _DEFAULT_MAX_TOKENS = 8192
 # structured output is enforced by forcing a single synthetic tool whose
 # input_schema is the requested schema and reading its arguments back.
 _STRUCTURED_OUTPUT_TOOL = "emit_structured_output"
+
+# Prompt-caching marker (5-minute TTL). Prefixes under the model's minimum
+# (512+ tokens on current models) silently don't cache; no error is raised.
+_EPHEMERAL = {"type": "ephemeral"}
 
 # Models that still accept temperature/top_p: the Claude 3 family and Claude 4
 # through 4.6 (bare or date-suffixed IDs). Anything newer, or unrecognised, is
@@ -249,10 +255,32 @@ class AnthropicProvider(BaseProvider[T]):
             else:
                 kwargs["tool_choice"] = {"type": "tool", "name": request.tool_choice}
 
+        self._add_cache_breakpoints(kwargs)
+
         if request.extra_body:
             kwargs.update(request.extra_body.get("anthropic", {}))
 
         return kwargs
+
+    @staticmethod
+    def _add_cache_breakpoints(kwargs: dict[str, Any]) -> None:
+        """Mark the request for prompt caching (it is opt-in per request).
+
+        The API renders tools, then system, then messages, and caches by exact
+        prefix. The tools + system prompt repeat across calls, so they get an
+        explicit breakpoint on their last block. The message tail is cached
+        (top-level automatic breakpoint) only once the request continues a
+        conversation: a one-shot call's tail is never re-sent, so caching it
+        would only pay the write premium.
+        """
+        if kwargs.get("system"):
+            kwargs["system"] = [
+                {"type": "text", "text": kwargs["system"], "cache_control": _EPHEMERAL}
+            ]
+        elif kwargs.get("tools"):
+            kwargs["tools"][-1] = {**kwargs["tools"][-1], "cache_control": _EPHEMERAL}
+        if any(m["role"] == "assistant" for m in kwargs["messages"]):
+            kwargs["cache_control"] = _EPHEMERAL
 
     def _parse_response(self, response: Any, request: ChatRequest[T]) -> ChatResponse[T]:
         text_blocks = [
